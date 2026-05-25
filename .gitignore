@@ -9,3 +9,4 @@ dist/
 Thumbs.db
 temp/*.pdf
 .claude/
+/package-lock.json
