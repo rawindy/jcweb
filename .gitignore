@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.db
+*.db-shm
+*.db-wal
+.env
+*.log
+.DS_Store
+Thumbs.db
+temp/*.pdf
+.claude/
