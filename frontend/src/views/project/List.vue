@@ -1,15 +1,36 @@
 <template>
-  <div class="page">
+  <div class="page-container">
     <div class="page-header">
       <h3>工程项目登记</h3>
-      <el-button type="primary" @click="openDialog()">新增工程项目</el-button>
+      <el-button type="primary" @click="openDialog()">
+        <el-icon style="margin-right:4px"><Plus /></el-icon>
+        新增工程项目
+      </el-button>
+    </div>
+
+    <!-- 统计卡片 -->
+    <div class="stat-row">
+      <div class="stat-card">
+        <div class="stat-icon blue"><el-icon :size="22"><FolderOpened /></el-icon></div>
+        <div class="stat-info">
+          <div class="stat-num">{{ pagination.total }}</div>
+          <div class="stat-label">工程项目总数</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon green"><el-icon :size="22"><CircleCheck /></el-icon></div>
+        <div class="stat-info">
+          <div class="stat-num">{{ tableData.length }}</div>
+          <div class="stat-label">当前页项目</div>
+        </div>
+      </div>
     </div>
 
     <!-- 搜索区 -->
-    <el-card class="search-card" shadow="never">
+    <el-card shadow="never" class="search-card">
       <el-form :inline="true" :model="searchForm">
         <el-form-item label="搜索字段">
-          <el-select v-model="searchForm.field" placeholder="全部字段" clearable style="width:160px">
+          <el-select v-model="searchForm.field" placeholder="全部字段" clearable style="width:150px">
             <el-option label="工程编号" value="project_no" />
             <el-option label="工程名称" value="project_name" />
             <el-option label="委托单位" value="client_unit" />
@@ -22,27 +43,32 @@
         </el-form-item>
         <el-form-item label="关键词">
           <el-input v-model="searchForm.keyword" placeholder="输入关键词搜索" clearable style="width:240px"
-            @keyup.enter="handleSearch" />
+            @keyup.enter="handleSearch">
+            <template #prefix><el-icon><Search /></el-icon></template>
+          </el-input>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="handleSearch">搜索</el-button>
+          <el-button type="primary" @click="handleSearch">
+            <el-icon style="margin-right:4px"><Search /></el-icon>搜索
+          </el-button>
           <el-button @click="resetSearch">重置</el-button>
         </el-form-item>
       </el-form>
     </el-card>
 
     <!-- 数据表格 -->
-    <el-card shadow="never">
-      <el-table :data="tableData" v-loading="loading" stripe border style="width:100%"
+    <el-card shadow="never" class="table-card">
+      <el-table :data="tableData" v-loading="loading" stripe style="width:100%"
+        :header-cell-style="{ background: '#f8f9fb', color: '#1e1e1e', fontWeight: 600 }"
         @sort-change="handleSortChange">
-        <el-table-column prop="project_no" label="工程编号" width="100" sortable="custom" />
+        <el-table-column prop="project_no" label="工程编号" width="110" sortable="custom" />
         <el-table-column prop="project_name" label="工程名称" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="client_unit" label="委托单位" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="client_unit" label="委托单位" min-width="160" show-overflow-tooltip />
         <el-table-column prop="client_person" label="委托人" width="100" />
-        <el-table-column prop="supervision_unit" label="监理单位" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="supervision_unit" label="监理单位" min-width="160" show-overflow-tooltip />
         <el-table-column prop="witness_person" label="见证人" width="100" />
-        <el-table-column prop="construction_unit" label="施工单位" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="build_unit" label="建设单位" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="construction_unit" label="施工单位" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="build_unit" label="建设单位" min-width="160" show-overflow-tooltip />
         <el-table-column prop="create_time" label="创建时间" width="160" sortable="custom" />
         <el-table-column label="操作" width="150" fixed="right">
           <template #default="{ row }">
@@ -68,17 +94,14 @@
     <el-dialog
       v-model="dialogVisible"
       :title="isEdit ? '编辑工程项目' : '新增工程项目'"
-      width="650px"
+      width="680px"
       :close-on-click-modal="false"
+      destroy-on-close
     >
       <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
-        <el-row :gutter="20">
-          <el-col :span="12">
-            <el-form-item label="工程编号" v-if="isEdit">
-              <el-input :model-value="form.project_no" disabled />
-            </el-form-item>
-          </el-col>
-        </el-row>
+        <el-form-item label="工程编号" v-if="isEdit">
+          <el-input v-model="form.project_no" placeholder="请输入工程编号" />
+        </el-form-item>
         <el-form-item label="工程名称" prop="project_name">
           <el-input v-model="form.project_name" placeholder="请输入工程名称" />
         </el-form-item>
@@ -243,22 +266,13 @@ async function handleSubmit() {
 }
 
 async function handleDelete(row) {
-  await ElMessageBox.confirm(`确定删除工程「${row.project_name}」吗？`, '确认', { type: 'warning' })
+  await ElMessageBox.confirm(`确定删除工程「${row.project_name}」吗？`, '确认删除', {
+    type: 'warning',
+    confirmButtonText: '确定',
+    cancelButtonText: '取消'
+  })
   await deleteProject(row.id)
   ElMessage.success('删除成功')
   fetchData()
 }
 </script>
-
-<style scoped>
-.page { padding: 0; }
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-.page-header h3 { margin: 0; }
-.search-card { margin-bottom: 16px; }
-.pagination-wrap { display:flex; justify-content: flex-end; margin-top: 16px; }
-</style>

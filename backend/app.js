@@ -6,6 +6,7 @@ const authRoutes = require('./routes/auth');
 const projectRoutes = require('./routes/project');
 const entrustRoutes = require('./routes/entrust');
 const recordRoutes = require('./routes/record');
+const instrumentRoutes = require('./routes/instrument');
 
 const app = express();
 
@@ -17,6 +18,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/entrusts', entrustRoutes);
 app.use('/api/records', recordRoutes);
+app.use('/api/instruments', instrumentRoutes);
 
 // 健康检查
 app.get('/api/health', (req, res) => {

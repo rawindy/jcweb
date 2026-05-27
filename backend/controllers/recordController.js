@@ -5,6 +5,7 @@ const PizZip = require('pizzip');
 const { query, getDb } = require('../config/db');
 const { generateSampleNos } = require('../utils/codeGenerator');
 const { batchDocxToPdf } = require('../utils/pdfConverter');
+const { bankersRound } = require('../utils/rounding');
 
 exports.getRecords = async (req, res) => {
   try {
@@ -55,11 +56,15 @@ exports.getRecords = async (req, res) => {
         const [rows] = query(
           'SELECT * FROM biz_original_record_item WHERE record_id = ? ORDER BY seq_no', [record.id]
         );
-        const parsedRows = rows.map(r => ({
-          ...r,
-          test_values: typeof r.test_values === 'string' ? JSON.parse(r.test_values) : (r.test_values || {}),
-          _empty: !r.sample_no
-        }));
+        const parsedRows = rows.map(r => {
+          const item = items.find(it => it.position_name === r.position_name)
+          return {
+            ...r,
+            material: item?.material || '',
+            test_values: typeof r.test_values === 'string' ? JSON.parse(r.test_values) : (r.test_values || {}),
+            _empty: !r.sample_no
+          }
+        });
         while (parsedRows.length < itemsPerPage) {
           parsedRows.push({
             seq_no: parsedRows.length + 1, sample_no: '', position_name: '',
@@ -77,6 +82,13 @@ exports.getRecords = async (req, res) => {
         let extra = {};
         try { extra = typeof extraStr === 'string' ? JSON.parse(extraStr) : extraStr; } catch { extra = {}; }
 
+        // 旧格式兼容
+        let maxDryDensities = extra.max_dry_densities || {};
+        if (!Object.keys(maxDryDensities).length && extra.max_dry_density) {
+          const mats = [...new Set(items.map(i => i.material).filter(Boolean))];
+          if (mats.length > 0) maxDryDensities[mats[0]] = extra.max_dry_density;
+        }
+
         pages.push({
           page_no: record.page_no,
           total_pages: record.total_pages,
@@ -85,7 +97,8 @@ exports.getRecords = async (req, res) => {
           extra: {
             structure_layer: extra.structure_layer || '',
             design_req: extra.design_req || '',
-            max_dry_density: extra.max_dry_density || '',
+            max_dry_densities: maxDryDensities,
+            max_dry_density: Object.values(maxDryDensities).find(Boolean) || '',
             conclusion: extra.conclusion || '',
             remark_footer: extra.remark_footer || '',
             tester: extra.tester || '',
@@ -162,7 +175,7 @@ exports.getRecords = async (req, res) => {
           template_type: tmplType,
           header_data: headerData,
           extra: {
-            structure_layer: '', design_req: '', max_dry_density: '',
+            structure_layer: '', design_req: '', max_dry_densities: {}, max_dry_density: '',
             conclusion: '', remark_footer: '', tester: '', reviewer: '', test_date: ''
           },
           rows: pageRows
@@ -170,6 +183,7 @@ exports.getRecords = async (req, res) => {
       }
     }
 
+    entrust.items = items;
     res.json({ code: 200, data: { entrust, totalSampleCount, totalPages, pages } });
   } catch (err) {
     console.error(err);
@@ -244,10 +258,6 @@ exports.printPdf = async (req, res) => {
     }
     const entrust = entrusts[0];
 
-    if (entrust.entrust_type !== '路基压实度') {
-      return res.status(400).json({ code: 400, message: '此模板仅支持路基压实度' });
-    }
-
     const [savedRecords] = query(
       'SELECT * FROM biz_original_record WHERE entrust_id = ? ORDER BY page_no', [entrustId]
     );
@@ -255,15 +265,20 @@ exports.printPdf = async (req, res) => {
       return res.status(400).json({ code: 400, message: '请先保存记录数据后再打印' });
     }
 
-    // 2. 加载模板
-    const templatePath = path.join(__dirname, '..', '..', 'temp', '压实度（道路）（灌砂法）检测原始记录单.docx');
+    // 根据 template_type 选择模板
+    const tmplType = savedRecords[0]?.template_type || 'roadbed_sand';
+    const isPipe = tmplType === 'pipe_compaction';
+    const templateName = isPipe
+      ? '压实度（管道）（灌砂法）检测原始记录单.docx'
+      : '压实度（道路）（灌砂法）检测原始记录单.docx';
+    const templatePath = path.join(__dirname, '..', '..', 'temp', templateName);
     if (!fs.existsSync(templatePath)) {
       return res.status(404).json({ code: 404, message: 'DOCX模板文件不存在' });
     }
 
     // 3. 读取材料
     const [items] = query(
-      'SELECT material FROM biz_compaction_item WHERE entrust_id = ? ORDER BY sort', [entrustId]
+      'SELECT material, position_name FROM biz_compaction_item WHERE entrust_id = ? ORDER BY sort', [entrustId]
     );
     const materials = [...new Set(items.map(i => i.material).filter(Boolean))];
     const materialStr = materials.join('、');
@@ -271,9 +286,39 @@ exports.printPdf = async (req, res) => {
     const totalPages = Math.max(...savedRecords.map(r => r.total_pages || 1));
     const entrustNo = entrust.entrust_no;
 
-    // 因 docx 的 ZIP 本质，逐页填充需要为每页生成独立的 docx，然后合并或分别处理。
-    // 简单方案：每页一个 docx → 转 PDF → 合并 PDF（如有多页）
-    // 当前先用逐页方案：
+    // 从有数据的页中提取共享的 extra（多页共用同一表头信息）
+    let sharedExtra = {};
+    for (const rec of savedRecords) {
+      try {
+        const r = typeof rec.remark === 'string' ? JSON.parse(rec.remark) : (rec.remark || {});
+        if (r.max_dry_density || r.max_dry_densities || r.structure_layer || r.design_req || r.conclusion || r.tester) {
+          sharedExtra = r;
+          break;
+        }
+      } catch {}
+    }
+
+    // 最大干密度映射：{ '砂': '2.11', '石屑': '2.05' }
+    const maxDryDensities = sharedExtra.max_dry_densities || {};
+    if (!Object.keys(maxDryDensities).length && sharedExtra.max_dry_density) {
+      const mats = [...new Set(items.map(i => i.material).filter(Boolean))];
+      if (mats.length > 0) maxDryDensities[mats[0]] = sharedExtra.max_dry_density;
+    }
+    const maxDryDisplay = (() => {
+      const entries = Object.entries(maxDryDensities).filter(([, v]) => v);
+      if (!entries.length) return '';
+      if (entries.length === 1) return `${entries[0][1]} g/cm³`;
+      return entries.map(([k, v]) => `${k} ${v} g/cm³`).join('，');
+    })();
+
+    function getRowMaxDry(rd) {
+      if (rd.material && maxDryDensities[rd.material]) {
+        return parseFloat(maxDryDensities[rd.material]) || 0;
+      }
+      const vals = Object.values(maxDryDensities).filter(Boolean);
+      return vals.length > 0 ? parseFloat(vals[0]) || 0 : 0;
+    }
+
     const convertPairs = []; // { docx, pdf, pageNo }
 
     for (const record of savedRecords) {
@@ -284,26 +329,26 @@ exports.printPdf = async (req, res) => {
           ? JSON.parse(record.header_data) : (record.header_data || {});
       } catch { headerData = {}; }
 
-      let extra = {};
-      try {
-        extra = typeof record.remark === 'string'
-          ? JSON.parse(record.remark) : (record.remark || {});
-      } catch { extra = {}; }
-
-      const maxDryDensity = parseFloat(extra.max_dry_density) || 0;
-
       const [rows] = query(
         'SELECT * FROM biz_original_record_item WHERE record_id = ? ORDER BY seq_no', [record.id]
       );
-      const parsedRows = rows.map(r => ({
-        ...r,
-        test_values: typeof r.test_values === 'string'
-          ? JSON.parse(r.test_values) : (r.test_values || {})
-      }));
+      const parsedRows = rows.map(r => {
+        const item = items.find(it => it.position_name === r.position_name);
+        return {
+          ...r,
+          material: item?.material || '',
+          test_values: typeof r.test_values === 'string'
+            ? JSON.parse(r.test_values) : (r.test_values || {})
+        };
+      });
 
       // 4. 填充 docx
       const zip = new PizZip(fs.readFileSync(templatePath));
       let xml = zip.files['word/document.xml'].asText();
+      // 全局修正西文字体为 Times New Roman，去除东亚文字提示
+      xml = xml.replace(/w:ascii="宋体"/g, 'w:ascii="Times New Roman"');
+      xml = xml.replace(/w:hAnsi="宋体"/g, 'w:hAnsi="Times New Roman"');
+      xml = xml.replace(/w:hint="eastAsia"/g, '');
 
       // --- 抬头文本替换 ---
       xml = xml.replace(
@@ -318,11 +363,11 @@ exports.printPdf = async (req, res) => {
         { label: '工程名称',   value: headerData.project_name || entrust.project_name || '' },
         { label: '委托单位',   value: headerData.client_unit || entrust.client_unit || '' },
         { label: '见证单位',   value: headerData.supervision_unit || entrust.supervision_unit || '' },
-        { label: '结构层次',   value: extra.structure_layer || materialStr },
-        { label: '设计要求',   value: extra.design_req || '' },
-        { label: '最大干密度', value: maxDryDensity > 0 ? maxDryDensity.toFixed(3) : '' },
-        { label: '检测结论',   value: extra.conclusion || '' },
-        { label: '备    注',   value: extra.remark_footer || '' },
+        { label: '结构层次',   value: sharedExtra.structure_layer || materialStr },
+        { label: '设计要求',   value: sharedExtra.design_req || '' },
+        { label: '最大干密度', value: maxDryDisplay },
+        { label: '检测结论',   value: sharedExtra.conclusion || '' },
+        { label: '备    注',   value: sharedExtra.remark_footer || '' },
       ];
 
       for (const { label, value } of cellMap) {
@@ -337,20 +382,25 @@ exports.printPdf = async (req, res) => {
         'pit_sand', 'sand_density', 'pit_volume',
         'wet_mass', 'wet_density', 'box_no',
         'box_mass', 'box_wet', 'box_dry',
-        'water_content', 'dry_density', 'compaction'
+        'water_content', 'dry_density', 'max_dry_density',
+        'compaction'
       ];
       const dataRowLabels = [
-        '编号', '桩号', '取样位置距中', '灌砂前砂', '灌砂后',
+        '编号', '桩号', isPipe ? '取样位置' : '取样位置距中', '灌砂前砂', '灌砂后',
         '合计质量', '试坑灌入量砂', '量砂堆积', '试坑体积',
         '试坑中挖出的湿料质量', '试样湿密度', '盒号',
         '盒质量', '湿料质量', '干料质量',
-        '含水率', '干密度', '压实度'
+        '含水率', '干密度', '最大干密度',
+        '压实度'
       ];
 
       let searchPos = 0;
       for (let ri = 0; ri < dataRowLabels.length; ri++) {
         const label = dataRowLabels[ri];
         const key = paramKeys[ri];
+        // 管道模板的桩号/取样位置每3列合并，按组填充
+        const groupSize = (isPipe && (key === 'stake_no' || key === 'position')) ? 3 : 1;
+        const groupCount = groupSize > 1 ? Math.ceil(9 / groupSize) : 9;
         const values = [];
 
         for (let col = 0; col < 9; col++) {
@@ -359,27 +409,33 @@ exports.printPdf = async (req, res) => {
           const tv = rd.test_values || {};
 
           if (key === 'sample') {
-            values.push(rd.sample_no || '');
+            values.push(String(rd.seq_no || col + 1));
           } else if (key === 'max_dry_density') {
-            values.push(maxDryDensity > 0 ? maxDryDensity.toFixed(3) : '');
+            const mdd = getRowMaxDry(rd);
+            values.push(mdd > 0 ? bankersRound(mdd, 2) : '');
           } else if (['pit_sand', 'pit_volume', 'wet_density', 'water_content', 'dry_density', 'compaction'].includes(key)) {
-            values.push(calcField(key, tv, maxDryDensity));
+            values.push(calcField(key, tv, getRowMaxDry(rd)));
           } else {
             values.push(tv[key] !== undefined && tv[key] !== null ? String(tv[key]) : '');
           }
         }
 
-        const result = fillDataRow(xml, label, values, searchPos);
+        // 合并模式：取每组第一个样品的值作为该组的值
+        const fillValues = groupSize > 1
+          ? (() => { const gv = []; for (let g = 0; g < groupCount; g++) gv.push(values[g * groupSize] || ''); return gv; })()
+          : values;
+
+        const result = fillDataRow(xml, label, fillValues, searchPos);
         xml = result.xml;
         searchPos = result.nextPos;
       }
 
       // --- 底部签名 ---
-      xml = replaceAfterLabel(xml, '试验人：', extra.tester || '');
-      xml = replaceAfterLabel(xml, '复核人：', extra.reviewer || '');
+      xml = replaceAfterLabel(xml, '试验人：', sharedExtra.tester || '');
+      xml = replaceAfterLabel(xml, '复核人：', sharedExtra.reviewer || '');
 
-      if (extra.test_date) {
-        const parts = String(extra.test_date).split(/[-/]/);
+      if (sharedExtra.test_date) {
+        const parts = String(sharedExtra.test_date).split(/[-/]/);
         if (parts.length === 3) {
           xml = replaceAfterLabel(xml, '试验日期：', parts[0]);
           xml = replaceInRun(xml, '年', parts[1], true);
@@ -441,6 +497,555 @@ exports.printPdf = async (req, res) => {
   }
 };
 
+// ===== 打印进度追踪 =====
+const printJobs = new Map();
+
+// 每 5 分钟清理超过 10 分钟的过期任务
+setInterval(() => {
+  const now = Date.now();
+  for (const [taskId, job] of printJobs) {
+    // taskId 前 8 位是时间戳（36进制），解码后判断是否过期
+    const ts = parseInt(taskId, 36);
+    if (!isNaN(ts) && now - ts > 10 * 60 * 1000) {
+      if (job.pdfPath) try { fs.unlinkSync(job.pdfPath); } catch {}
+      printJobs.delete(taskId);
+    }
+  }
+}, 5 * 60 * 1000);
+
+function yield_() {
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+// POST /:id/print/start — 启动打印任务
+exports.startPrint = async (req, res) => {
+  try {
+    const { id: entrustId } = req.params;
+    const taskId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+
+    printJobs.set(taskId, { step: 0, totalSteps: 1, message: '准备中...', done: false, error: null, pdfPath: null });
+
+    // 异步处理，不阻塞响应
+    generatePdf(entrustId, taskId).catch(err => {
+      const job = printJobs.get(taskId);
+      if (job) { job.message = err.message; job.error = true; job.done = true; }
+    });
+
+    res.json({ code: 200, data: { taskId } });
+  } catch (err) {
+    res.status(500).json({ code: 500, message: err.message });
+  }
+};
+
+// GET /:id/print/status/:taskId — 查询打印进度
+exports.printStatus = (req, res) => {
+  const job = printJobs.get(req.params.taskId);
+  if (!job) return res.status(404).json({ code: 404, message: '任务不存在或已过期' });
+  res.json({ code: 200, data: job });
+};
+
+// GET /:id/print/download/:taskId — 下载生成的 PDF
+exports.printDownload = (req, res) => {
+  const job = printJobs.get(req.params.taskId);
+  if (!job || !job.pdfPath) return res.status(404).json({ code: 404, message: 'PDF未就绪' });
+
+  const pdfPath = job.pdfPath;
+  if (!fs.existsSync(pdfPath)) return res.status(404).json({ code: 404, message: 'PDF文件已丢失，请重新生成' });
+
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="${path.basename(pdfPath)}"`);
+
+  const stream = fs.createReadStream(pdfPath);
+  stream.pipe(res);
+  stream.on('end', () => {
+    try { fs.unlinkSync(pdfPath); } catch {}
+    printJobs.delete(req.params.taskId);
+  });
+};
+
+// ===== 空白记录单打印 =====
+
+// POST /:id/print/blank/start — 启动空白记录单打印任务
+exports.startPrintBlank = async (req, res) => {
+  try {
+    const { id: entrustId } = req.params;
+    const taskId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+
+    printJobs.set(taskId, { step: 0, totalSteps: 1, message: '准备中...', done: false, error: null, pdfPath: null });
+
+    generateBlankPdf(entrustId, taskId).catch(err => {
+      const job = printJobs.get(taskId);
+      if (job) { job.message = err.message; job.error = true; job.done = true; }
+    });
+
+    res.json({ code: 200, data: { taskId } });
+  } catch (err) {
+    res.status(500).json({ code: 500, message: err.message });
+  }
+};
+
+// GET /:id/print/blank/status/:taskId — 查询空白打印进度
+exports.printBlankStatus = (req, res) => {
+  const job = printJobs.get(req.params.taskId);
+  if (!job) return res.status(404).json({ code: 404, message: '任务不存在或已过期' });
+  res.json({ code: 200, data: job });
+};
+
+// GET /:id/print/blank/download/:taskId — 下载空白记录单 PDF
+exports.printBlankDownload = (req, res) => {
+  const job = printJobs.get(req.params.taskId);
+  if (!job || !job.pdfPath) return res.status(404).json({ code: 404, message: 'PDF未就绪' });
+
+  const pdfPath = job.pdfPath;
+  if (!fs.existsSync(pdfPath)) return res.status(404).json({ code: 404, message: 'PDF文件已丢失，请重新生成' });
+
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="${path.basename(pdfPath)}"`);
+
+  const stream = fs.createReadStream(pdfPath);
+  stream.pipe(res);
+  stream.on('end', () => {
+    try { fs.unlinkSync(pdfPath); } catch {}
+    printJobs.delete(req.params.taskId);
+  });
+};
+
+// 异步生成空白记录单 PDF（仅抬头和编号，不填检测数据）
+async function generateBlankPdf(entrustId, taskId) {
+  const update = (step, total, msg) => {
+    printJobs.set(taskId, { step, totalSteps: total, message: msg, done: false, error: null, pdfPath: null });
+  };
+
+  // Step 1: 查询数据
+  update(1, 3, '正在查询数据...');
+  await yield_();
+
+  const [entrusts] = query(
+    `SELECT e.*, p.project_no, p.project_name, p.client_unit, p.client_person,
+            p.supervision_unit, p.witness_person, p.construction_unit, p.build_unit
+     FROM biz_entrust e LEFT JOIN biz_project p ON e.project_id = p.id
+     WHERE e.id = ?`, [entrustId]
+  );
+  if (entrusts.length === 0) throw new Error('委托单不存在');
+  const entrust = entrusts[0];
+
+  const [savedRecords] = query(
+    'SELECT * FROM biz_original_record WHERE entrust_id = ? ORDER BY page_no', [entrustId]
+  );
+  if (savedRecords.length === 0) throw new Error('请先初始化记录数据后再打印');
+
+  const tmplType = savedRecords[0]?.template_type || 'roadbed_sand';
+  const isPipe = tmplType === 'pipe_compaction';
+  const templateName = isPipe
+    ? '压实度（管道）（灌砂法）检测原始记录单.docx'
+    : '压实度（道路）（灌砂法）检测原始记录单.docx';
+  const templatePath = path.join(__dirname, '..', '..', 'temp', templateName);
+  if (!fs.existsSync(templatePath)) throw new Error('DOCX模板文件不存在');
+
+  const [items] = query(
+    'SELECT material, position_name FROM biz_compaction_item WHERE entrust_id = ? ORDER BY sort', [entrustId]
+  );
+  const materials = [...new Set(items.map(i => i.material).filter(Boolean))];
+  const materialStr = materials.join('、');
+
+  const totalPages = Math.max(...savedRecords.map(r => r.total_pages || 1));
+  const entrustNo = entrust.entrust_no;
+
+  let sharedExtra = {};
+  for (const rec of savedRecords) {
+    try {
+      const r = typeof rec.remark === 'string' ? JSON.parse(rec.remark) : (rec.remark || {});
+      if (r.max_dry_density || r.max_dry_densities || r.structure_layer || r.design_req || r.conclusion || r.tester) {
+        sharedExtra = r; break;
+      }
+    } catch {}
+  }
+
+  const maxDryDensities = sharedExtra.max_dry_densities || {};
+  if (!Object.keys(maxDryDensities).length && sharedExtra.max_dry_density) {
+    const mats = [...new Set(items.map(i => i.material).filter(Boolean))];
+    if (mats.length > 0) maxDryDensities[mats[0]] = sharedExtra.max_dry_density;
+  }
+  const maxDryDisplay = (() => {
+    const entries = Object.entries(maxDryDensities).filter(([, v]) => v);
+    if (!entries.length) return '';
+    if (entries.length === 1) return `${entries[0][1]} g/cm³`;
+    return entries.map(([k, v]) => `${k} ${v} g/cm³`).join('，');
+  })();
+
+  // 总步骤：查询(1) + 逐页生成(N) + 转换(1) + 合并(1) = N+3
+  const totalSteps = savedRecords.length + 3;
+  const convertPairs = [];
+
+  const cellMap = [
+    { label: '工程名称',   value: '' },
+    { label: '委托单位',   value: '' },
+    { label: '见证单位',   value: '' },
+    { label: '结构层次',   value: sharedExtra.structure_layer || materialStr },
+    { label: '设计要求',   value: sharedExtra.design_req || '' },
+    { label: '最大干密度', value: maxDryDisplay },
+    { label: '检测结论',   value: sharedExtra.conclusion || '' },
+    { label: '备    注',   value: sharedExtra.remark_footer || '' },
+  ];
+
+  // Step 2: 逐页生成 docx
+  for (let pi = 0; pi < savedRecords.length; pi++) {
+    const record = savedRecords[pi];
+    update(pi + 2, totalSteps, `正在生成第 ${pi + 1}/${savedRecords.length} 页空白文档...`);
+    await yield_();
+
+    let headerData = {};
+    try {
+      headerData = typeof record.header_data === 'string'
+        ? JSON.parse(record.header_data) : (record.header_data || {});
+    } catch { headerData = {}; }
+
+    const [rows] = query(
+      'SELECT * FROM biz_original_record_item WHERE record_id = ? ORDER BY seq_no', [record.id]
+    );
+    const parsedRows = rows.map(r => ({
+      ...r,
+      test_values: typeof r.test_values === 'string'
+        ? JSON.parse(r.test_values) : (r.test_values || {})
+    }));
+
+    const zip = new PizZip(fs.readFileSync(templatePath));
+    let xml = zip.files['word/document.xml'].asText();
+    // 全局修正西文字体为 Times New Roman
+    xml = xml.replace(/w:ascii="宋体"/g, 'w:ascii="Times New Roman"');
+    xml = xml.replace(/w:hAnsi="宋体"/g, 'w:hAnsi="Times New Roman"');
+
+    xml = xml.replace(
+      '委托编号：                      共   页第   页              记录单编号：',
+      `委托编号：${entrustNo}              共 ${totalPages} 页第 ${record.page_no} 页              记录单编号：`
+    );
+    xml = xml.replace('JL/', `JL/${entrustNo}`);
+
+    const pageCellMap = cellMap.map(c => {
+      if (c.label === '工程名称') return { ...c, value: headerData.project_name || entrust.project_name || '' };
+      if (c.label === '委托单位') return { ...c, value: headerData.client_unit || entrust.client_unit || '' };
+      if (c.label === '见证单位') return { ...c, value: headerData.supervision_unit || entrust.supervision_unit || '' };
+      return c;
+    });
+    for (const { label, value } of pageCellMap) {
+      xml = fillCellAfter(xml, label, value);
+    }
+
+    // 仅填写编号行，其余数据行留空
+    let searchPos = 0;
+    const sampleLabel = '编号';
+    const sampleValues = [];
+    for (let col = 0; col < 9; col++) {
+      const rd = parsedRows[col];
+      if (!rd || rd._empty) { sampleValues.push(''); continue; }
+      sampleValues.push(String(rd.seq_no || col + 1));
+    }
+    const result = fillDataRow(xml, sampleLabel, sampleValues, searchPos);
+    xml = result.xml;
+    searchPos = result.nextPos;
+
+    // 填写页脚信息（试验人、复核人、日期）
+    xml = replaceAfterLabel(xml, '试验人：', sharedExtra.tester || '');
+    xml = replaceAfterLabel(xml, '复核人：', sharedExtra.reviewer || '');
+    if (sharedExtra.test_date) {
+      const parts = String(sharedExtra.test_date).split(/[-/]/);
+      if (parts.length === 3) {
+        xml = replaceAfterLabel(xml, '试验日期：', parts[0]);
+        xml = replaceInRun(xml, '年', parts[1], true);
+        xml = replaceInRun(xml, '月', parts[2], true);
+      }
+    }
+
+    zip.file('word/document.xml', xml);
+    const tmpDocx = os.tmpdir().replace(/\//g, '\\') + '\\' + `blank_${entrustId}_p${record.page_no}.docx`;
+    const tmpPdf = os.tmpdir().replace(/\//g, '\\') + '\\' + `blank_${entrustId}_p${record.page_no}.pdf`;
+    const buf = zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+    fs.writeFileSync(tmpDocx, buf);
+    convertPairs.push({ docx: tmpDocx, pdf: tmpPdf, pageNo: record.page_no });
+  }
+
+  // Step N+3: PDF 转换
+  update(totalSteps - 1, totalSteps, `正在转换 PDF（共 ${convertPairs.length} 页）...`);
+  await yield_();
+
+  if (convertPairs.length > 0) {
+    await batchDocxToPdf(convertPairs);
+  }
+  await yield_();
+
+  // Step N+4: 合并 PDF
+  update(totalSteps, totalSteps, '正在合并 PDF...');
+  await yield_();
+
+  const pdfBuffers = [];
+  for (const pair of convertPairs) {
+    try {
+      if (fs.existsSync(pair.pdf)) pdfBuffers.push({ pageNo: pair.pageNo, buffer: fs.readFileSync(pair.pdf) });
+    } catch {}
+    try { fs.unlinkSync(pair.docx); } catch {}
+    try { fs.unlinkSync(pair.pdf); } catch {}
+  }
+
+  const { PDFDocument: PDFLib } = require('pdf-lib');
+  const merged = await PDFLib.create();
+  for (const { buffer } of pdfBuffers.sort((a, b) => a.pageNo - b.pageNo)) {
+    const src = await PDFLib.load(buffer);
+    const pages = await merged.embedPdf(src);
+    for (let i = 0; i < pages.length; i++) {
+      const page = merged.addPage([pages[i].width, pages[i].height]);
+      page.drawPage(pages[i]);
+    }
+  }
+
+  const finalPdf = await merged.save();
+  const pdfPath = path.join(os.tmpdir(), `blank_${entrustId}_${Date.now()}.pdf`);
+  fs.writeFileSync(pdfPath, finalPdf);
+
+  printJobs.set(taskId, {
+    step: totalSteps, totalSteps, message: '生成完成，正在下载...',
+    done: true, error: null, pdfPath
+  });
+}
+
+// 异步生成 PDF，逐步更新进度
+async function generatePdf(entrustId, taskId) {
+  const update = (step, total, msg) => {
+    printJobs.set(taskId, { step, totalSteps: total, message: msg, done: false, error: null, pdfPath: null });
+  };
+
+  // Step 1: 查询数据
+  update(1, 3, '正在查询数据...');
+  await yield_();
+
+  const [entrusts] = query(
+    `SELECT e.*, p.project_no, p.project_name, p.client_unit, p.client_person,
+            p.supervision_unit, p.witness_person, p.construction_unit, p.build_unit
+     FROM biz_entrust e LEFT JOIN biz_project p ON e.project_id = p.id
+     WHERE e.id = ?`, [entrustId]
+  );
+  if (entrusts.length === 0) throw new Error('委托单不存在');
+  const entrust = entrusts[0];
+
+  const [savedRecords] = query(
+    'SELECT * FROM biz_original_record WHERE entrust_id = ? ORDER BY page_no', [entrustId]
+  );
+  if (savedRecords.length === 0) throw new Error('请先保存记录数据后再打印');
+
+  const tmplType = savedRecords[0]?.template_type || 'roadbed_sand';
+  const isPipe = tmplType === 'pipe_compaction';
+  const templateName = isPipe
+    ? '压实度（管道）（灌砂法）检测原始记录单.docx'
+    : '压实度（道路）（灌砂法）检测原始记录单.docx';
+  const templatePath = path.join(__dirname, '..', '..', 'temp', templateName);
+  if (!fs.existsSync(templatePath)) throw new Error('DOCX模板文件不存在');
+
+  const [items] = query(
+    'SELECT material, position_name FROM biz_compaction_item WHERE entrust_id = ? ORDER BY sort', [entrustId]
+  );
+  const materials = [...new Set(items.map(i => i.material).filter(Boolean))];
+  const materialStr = materials.join('、');
+
+  const totalPages = Math.max(...savedRecords.map(r => r.total_pages || 1));
+  const entrustNo = entrust.entrust_no;
+
+  let sharedExtra = {};
+  for (const rec of savedRecords) {
+    try {
+      const r = typeof rec.remark === 'string' ? JSON.parse(rec.remark) : (rec.remark || {});
+      if (r.max_dry_density || r.max_dry_densities || r.structure_layer || r.design_req || r.conclusion || r.tester) {
+        sharedExtra = r; break;
+      }
+    } catch {}
+  }
+
+  // 最大干密度映射：{ '砂': '2.11', '石屑': '2.05' }
+  const maxDryDensities = sharedExtra.max_dry_densities || {};
+  if (!Object.keys(maxDryDensities).length && sharedExtra.max_dry_density) {
+    const mats = [...new Set(items.map(i => i.material).filter(Boolean))];
+    if (mats.length > 0) maxDryDensities[mats[0]] = sharedExtra.max_dry_density;
+  }
+  const maxDryDisplay = (() => {
+    const entries = Object.entries(maxDryDensities).filter(([, v]) => v);
+    if (!entries.length) return '';
+    if (entries.length === 1) return `${entries[0][1]} g/cm³`;
+    return entries.map(([k, v]) => `${k} ${v} g/cm³`).join('，');
+  })();
+
+  function getRowMaxDry(rd) {
+    if (rd.material && maxDryDensities[rd.material]) {
+      return parseFloat(maxDryDensities[rd.material]) || 0;
+    }
+    const vals = Object.values(maxDryDensities).filter(Boolean);
+    return vals.length > 0 ? parseFloat(vals[0]) || 0 : 0;
+  }
+
+  // 总步骤：查询(1) + 逐页生成(N) + 转换(1) + 合并(1) = N+3
+  const totalSteps = savedRecords.length + 3;
+  const convertPairs = [];
+
+  const paramKeys = [
+    'sample', 'stake_no', 'position',
+    'sand_before', 'sand_after', 'sand_surface',
+    'pit_sand', 'sand_density', 'pit_volume',
+    'wet_mass', 'wet_density', 'box_no',
+    'box_mass', 'box_wet', 'box_dry',
+    'water_content', 'dry_density', 'max_dry_density',
+    'compaction'
+  ];
+  const dataRowLabels = [
+    '编号', '桩号', isPipe ? '取样位置' : '取样位置距中', '灌砂前砂', '灌砂后',
+    '合计质量', '试坑灌入量砂', '量砂堆积', '试坑体积',
+    '试坑中挖出的湿料质量', '试样湿密度', '盒号',
+    '盒质量', '湿料质量', '干料质量',
+    '含水率', '干密度', '最大干密度',
+    '压实度'
+  ];
+  const cellMap = [
+    { label: '工程名称',   value: '' },
+    { label: '委托单位',   value: '' },
+    { label: '见证单位',   value: '' },
+    { label: '结构层次',   value: sharedExtra.structure_layer || materialStr },
+    { label: '设计要求',   value: sharedExtra.design_req || '' },
+    { label: '最大干密度', value: maxDryDisplay },
+    { label: '检测结论',   value: sharedExtra.conclusion || '' },
+    { label: '备    注',   value: sharedExtra.remark_footer || '' },
+  ];
+
+  // Step 2: 逐页生成 docx
+  for (let pi = 0; pi < savedRecords.length; pi++) {
+    const record = savedRecords[pi];
+    update(pi + 2, totalSteps, `正在生成第 ${pi + 1}/${savedRecords.length} 页文档...`);
+    await yield_();
+
+    let headerData = {};
+    try {
+      headerData = typeof record.header_data === 'string'
+        ? JSON.parse(record.header_data) : (record.header_data || {});
+    } catch { headerData = {}; }
+
+    const [rows] = query(
+      'SELECT * FROM biz_original_record_item WHERE record_id = ? ORDER BY seq_no', [record.id]
+    );
+    const parsedRows = rows.map(r => ({
+      ...r,
+      test_values: typeof r.test_values === 'string'
+        ? JSON.parse(r.test_values) : (r.test_values || {})
+    }));
+
+    const zip = new PizZip(fs.readFileSync(templatePath));
+    let xml = zip.files['word/document.xml'].asText();
+    // 全局修正西文字体为 Times New Roman
+    xml = xml.replace(/w:ascii="宋体"/g, 'w:ascii="Times New Roman"');
+    xml = xml.replace(/w:hAnsi="宋体"/g, 'w:hAnsi="Times New Roman"');
+
+    xml = xml.replace(
+      '委托编号：                      共   页第   页              记录单编号：',
+      `委托编号：${entrustNo}              共 ${totalPages} 页第 ${record.page_no} 页              记录单编号：`
+    );
+    xml = xml.replace('JL/', `JL/${entrustNo}`);
+
+    const pageCellMap = cellMap.map(c => {
+      if (c.label === '工程名称') return { ...c, value: headerData.project_name || entrust.project_name || '' };
+      if (c.label === '委托单位') return { ...c, value: headerData.client_unit || entrust.client_unit || '' };
+      if (c.label === '见证单位') return { ...c, value: headerData.supervision_unit || entrust.supervision_unit || '' };
+      return c;
+    });
+    for (const { label, value } of pageCellMap) {
+      xml = fillCellAfter(xml, label, value);
+    }
+
+    let searchPos = 0;
+    for (let ri = 0; ri < dataRowLabels.length; ri++) {
+      const label = dataRowLabels[ri];
+      const key = paramKeys[ri];
+      const groupSize = (isPipe && (key === 'stake_no' || key === 'position')) ? 3 : 1;
+      const groupCount = groupSize > 1 ? Math.ceil(9 / groupSize) : 9;
+      const values = [];
+      for (let col = 0; col < 9; col++) {
+        const rd = parsedRows[col];
+        if (!rd || rd._empty) { values.push(''); continue; }
+        const tv = rd.test_values || {};
+        if (key === 'sample') {
+          values.push(String(rd.seq_no || col + 1));
+        } else if (key === 'max_dry_density') {
+          const mdd = getRowMaxDry(rd);
+          values.push(mdd > 0 ? bankersRound(mdd, 2) : '');
+        } else if (['pit_sand', 'pit_volume', 'wet_density', 'water_content', 'dry_density', 'compaction'].includes(key)) {
+          values.push(calcField(key, tv, getRowMaxDry(rd)));
+        } else {
+          values.push(tv[key] !== undefined && tv[key] !== null ? String(tv[key]) : '');
+        }
+      }
+      const fillValues = groupSize > 1
+        ? (() => { const gv = []; for (let g = 0; g < groupCount; g++) gv.push(values[g * groupSize] || ''); return gv; })()
+        : values;
+      const result = fillDataRow(xml, label, fillValues, searchPos);
+      xml = result.xml;
+      searchPos = result.nextPos;
+    }
+
+    xml = replaceAfterLabel(xml, '试验人：', sharedExtra.tester || '');
+    xml = replaceAfterLabel(xml, '复核人：', sharedExtra.reviewer || '');
+    if (sharedExtra.test_date) {
+      const parts = String(sharedExtra.test_date).split(/[-/]/);
+      if (parts.length === 3) {
+        xml = replaceAfterLabel(xml, '试验日期：', parts[0]);
+        xml = replaceInRun(xml, '年', parts[1], true);
+        xml = replaceInRun(xml, '月', parts[2], true);
+      }
+    }
+
+    zip.file('word/document.xml', xml);
+    const tmpDocx = os.tmpdir().replace(/\//g, '\\') + '\\' + `record_${entrustId}_p${record.page_no}.docx`;
+    const tmpPdf = os.tmpdir().replace(/\//g, '\\') + '\\' + `record_${entrustId}_p${record.page_no}.pdf`;
+    const buf = zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+    fs.writeFileSync(tmpDocx, buf);
+    convertPairs.push({ docx: tmpDocx, pdf: tmpPdf, pageNo: record.page_no });
+  }
+
+  // Step N+3: PDF 转换
+  update(totalSteps - 1, totalSteps, `正在转换 PDF（共 ${convertPairs.length} 页）...`);
+  await yield_();
+
+  if (convertPairs.length > 0) {
+    await batchDocxToPdf(convertPairs);
+  }
+  await yield_();
+
+  // Step N+4: 合并 PDF
+  update(totalSteps, totalSteps, '正在合并 PDF...');
+  await yield_();
+
+  const pdfBuffers = [];
+  for (const pair of convertPairs) {
+    try {
+      if (fs.existsSync(pair.pdf)) pdfBuffers.push({ pageNo: pair.pageNo, buffer: fs.readFileSync(pair.pdf) });
+    } catch {}
+    try { fs.unlinkSync(pair.docx); } catch {}
+    try { fs.unlinkSync(pair.pdf); } catch {}
+  }
+
+  const { PDFDocument: PDFLib } = require('pdf-lib');
+  const merged = await PDFLib.create();
+  for (const { buffer } of pdfBuffers.sort((a, b) => a.pageNo - b.pageNo)) {
+    const src = await PDFLib.load(buffer);
+    const pages = await merged.embedPdf(src);
+    for (let i = 0; i < pages.length; i++) {
+      const page = merged.addPage([pages[i].width, pages[i].height]);
+      page.drawPage(pages[i]);
+    }
+  }
+
+  const finalPdf = await merged.save();
+  const pdfPath = path.join(os.tmpdir(), `print_${entrustId}_${Date.now()}.pdf`);
+  fs.writeFileSync(pdfPath, finalPdf);
+
+  printJobs.set(taskId, {
+    step: totalSteps, totalSteps, message: '生成完成，正在下载...',
+    done: true, error: null, pdfPath
+  });
+}
+
 // ===== XML 操作辅助函数 =====
 
 // 在标签文字后找到紧跟的空数据单元格，填入 value
@@ -468,14 +1073,21 @@ function fillCellAfter(xml, label, value) {
   const tcTagEnd = xml.indexOf('>', nextTcStart);
   let tcContent = xml.substring(tcTagEnd + 1, nextTcEnd);
 
-  // 移除预置干扰文字（<w:r[\s>] 确保只匹配 <w:r> 而不匹配 <w:rPr>）
-  tcContent = tcContent.replace(/<w:r[\s>][\s\S]*?<w:t[^>]*>[^<]*g\/[^<]*cm[^<]*<\/w:t>[\s\S]*?<\/w:r>/g, '');
-  tcContent = tcContent.replace(/<w:r[\s>][\s\S]*?<w:t[^>]*>3<\/w:t>[\s\S]*?<\/w:r>/g, '');
-  tcContent = tcContent.replace(/<w:r[\s>][\s\S]*?<w:t[^>]*>塘渣层<\/w:t>[\s\S]*?<\/w:r>/g, '');
+  // 移除预置干扰文字及所有旧 run（清除模板占位内容）
+  tcContent = tcContent.replace(/<w:r[\s>][\s\S]*?<\/w:r>/g, '');
+  // 移除固定列宽，让单元格自适应内容
+  tcContent = tcContent.replace(/<w:tcW[^>]*\/>/g, '');
 
   // 填入新值
   if (value && tcContent.includes('</w:pPr>')) {
-    const newRun = `<w:r><w:rPr><w:rFonts w:ascii="宋体" w:hAnsi="宋体" w:hint="eastAsia"/><w:szCs w:val="21"/></w:rPr><w:t xml:space="preserve">${escXml(value)}</w:t></w:r>`;
+    // 段落居中
+    if (/<w:jc\b/.test(tcContent)) {
+      tcContent = tcContent.replace(/<w:jc w:val="[^"]*"\/>/g, '<w:jc w:val="center"/>');
+    } else {
+      tcContent = tcContent.replace('</w:pPr>', '<w:jc w:val="center"/></w:pPr>');
+    }
+    const sz = fitFontSize(value);
+    const newRun = `<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="宋体"/><w:sz w:val="${sz}"/><w:szCs w:val="${sz}"/></w:rPr><w:t xml:space="preserve">${escXml(value)}</w:t></w:r>`;
     tcContent = tcContent.replace('</w:pPr>', '</w:pPr>' + newRun);
   }
 
@@ -493,7 +1105,9 @@ function fillDataRow(xml, label, values, startPos) {
 
   // 循环查找，跳过不在 <w:tr> 内的匹配（如标签出现在表头段落中）
   while ((idx = xml.indexOf(label, pos)) !== -1) {
-    const rowStart = xml.lastIndexOf('<w:tr', idx);
+    const tr1 = xml.lastIndexOf('<w:tr>', idx);
+    const tr2 = xml.lastIndexOf('<w:tr ', idx);
+    const rowStart = Math.max(tr1, tr2);
     const rowEnd = xml.indexOf('</w:tr>', idx) + '</w:tr>'.length;
 
     // 在有效的 <w:tr> 行内找到了
@@ -519,7 +1133,7 @@ function fillDataRow(xml, label, values, startPos) {
   for (const tc of tcs) {
     if (!skipped && tc.content.includes(label)) { skipped = true; continue; }
     if (!skipped) continue;
-    if (col >= 9) break;
+    if (col >= values.length) break;
 
     const val = values[col] || '';
 
@@ -530,7 +1144,7 @@ function fillDataRow(xml, label, values, startPos) {
 
     // 插入数据 run
     if (val && newContent.includes('</w:pPr>')) {
-      const newRun = `<w:r><w:rPr><w:rFonts w:ascii="宋体" w:hAnsi="宋体" w:hint="eastAsia"/><w:szCs w:val="21"/></w:rPr><w:t xml:space="preserve">${escXml(val)}</w:t></w:r>`;
+      const newRun = `<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="宋体"/><w:sz w:val="21"/><w:szCs w:val="21"/></w:rPr><w:t xml:space="preserve">${escXml(val)}</w:t></w:r>`;
       newContent = newContent.replace('</w:pPr>', '</w:pPr>' + newRun);
     }
 
@@ -595,6 +1209,19 @@ function escXml(s) {
     .replace(/"/g, '&quot;');
 }
 
+// 根据文本长度自适应字号（半磅值），避免表格溢出
+function fitFontSize(text) {
+  let w = 0;
+  for (const ch of String(text)) {
+    w += /[一-鿿　-〿＀-￯]/.test(ch) ? 2 : 1;
+  }
+  if (w <= 60) return '21';  // 10.5pt
+  if (w <= 80) return '18';  // 9pt
+  if (w <= 100) return '15'; // 7.5pt
+  if (w <= 120) return '13'; // 6.5pt
+  return '12';               // 6pt
+}
+
 // ===== 计算字段 =====
 function calcField(key, tv, maxDryDensity) {
   const n = (k) => { const v = parseFloat(tv[k]); return isNaN(v) ? 0 : v; };
@@ -617,12 +1244,12 @@ function calcField(key, tv, maxDryDensity) {
   const compaction = maxDryDensity > 0 && dryDensity > 0 ? dryDensity / maxDryDensity * 100 : 0;
 
   switch (key) {
-    case 'pit_sand':      return pitSand > 0 ? pitSand.toFixed(1) : '';
-    case 'pit_volume':    return pitVolume > 0 ? pitVolume.toFixed(1) : '';
-    case 'wet_density':   return wetDensity > 0 ? wetDensity.toFixed(3) : '';
-    case 'water_content': return waterContent > 0 ? waterContent.toFixed(1) : '';
-    case 'dry_density':   return dryDensity > 0 ? dryDensity.toFixed(3) : '';
-    case 'compaction':    return compaction > 0 ? compaction.toFixed(1) : '';
+    case 'pit_sand':      return pitSand > 0 ? bankersRound(pitSand, 0) : '';
+    case 'pit_volume':    return pitVolume > 0 ? bankersRound(pitVolume, 0) : '';
+    case 'wet_density':   return wetDensity > 0 ? bankersRound(wetDensity, 2) : '';
+    case 'water_content': return waterContent > 0 ? bankersRound(waterContent, 1) : '';
+    case 'dry_density':   return dryDensity > 0 ? bankersRound(dryDensity, 2) : '';
+    case 'compaction':    return compaction > 0 ? bankersRound(compaction, 1) : '';
     default: return '';
   }
 }

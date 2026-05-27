@@ -107,6 +107,19 @@ CREATE TABLE IF NOT EXISTS sys_dict_data (
   remark      TEXT DEFAULT NULL
 );
 
+-- 仪器库
+CREATE TABLE IF NOT EXISTS sys_instrument (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  category    TEXT NOT NULL,
+  code        TEXT NOT NULL,
+  mass        REAL NOT NULL,
+  status      INTEGER NOT NULL DEFAULT 1,
+  create_time TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  update_time TEXT DEFAULT (datetime('now','localtime')),
+  remark      TEXT DEFAULT NULL,
+  UNIQUE (category, code)
+);
+
 -- 业务模块
 CREATE TABLE IF NOT EXISTS biz_project (
   id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -272,6 +285,14 @@ db.prepare(`INSERT INTO sys_dict_data (dict_type, dict_label, dict_value, sort, 
   ('template_type',           '路基压实度(砂)',  'roadbed_sand',    3, 0),
   ('template_type',           '路基压实度(塘渣)','roadbed_slag',    4, 0)
 `).run();
+
+// 仪器库 - 白搪瓷盒
+db.prepare('DELETE FROM sys_instrument').run();
+const boxMasses = [380,375,371,364,372,368,388,359,376,377,368,369,367,382,374,375,389,392,369,388,380];
+const insertBox = db.prepare("INSERT INTO sys_instrument (category, code, mass) VALUES ('白搪瓷盒', ?, ?)");
+for (let i = 0; i < boxMasses.length; i++) {
+  insertBox.run(String(i + 1), boxMasses[i]);
+}
 
 // 示例工程项目
 db.prepare('DELETE FROM biz_project').run();

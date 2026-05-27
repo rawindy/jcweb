@@ -2,7 +2,7 @@ const dayjs = require('dayjs');
 const { query } = require('../config/db');
 
 function generateEntrustNo(categoryCode) {
-  const year = dayjs().format('YYYY');
+  const year = dayjs().format('YY');
   const prefix = `${categoryCode}${year}`;
   const [rows] = query(
     `SELECT MAX(entrust_no) AS max_no FROM biz_entrust
@@ -19,7 +19,7 @@ function generateEntrustNo(categoryCode) {
 
 function generateProjectNo() {
   const [rows] = query(
-    `SELECT MAX(project_no) AS max_no FROM biz_project`
+    `SELECT MAX(project_no) AS max_no FROM biz_project WHERE status = 1`
   );
   const maxNo = rows[0]?.max_no;
   let seq = 1;

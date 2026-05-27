@@ -1,7 +1,11 @@
 // 跨平台 docx → PDF 转换器
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { exec } = require('child_process');
+
+// 项目本地 LibreOffice 路径
+const LOCAL_SOFFICE = path.join(__dirname, '..', '..', 'tools', 'LibreOffice', 'program', 'soffice.exe');
 
 /**
  * 将 docx 文件转为 PDF
@@ -15,16 +19,20 @@ async function docxToPdf(docxPath, pdfPath, converter = 'auto') {
   }
 
   if (converter === 'libreoffice') {
-    return libreofficeConvert(docxPath, pdfPath);
+    return libreofficeConvert(docxPath, pdfPath, `single_${Date.now()}`);
   } else {
     return wordComConvert(docxPath, pdfPath);
   }
 }
 
-function libreofficeConvert(docxPath, pdfPath) {
+function libreofficeConvert(docxPath, pdfPath, profileId) {
   return new Promise((resolve, reject) => {
     const outDir = path.dirname(pdfPath);
-    const cmd = `libreoffice --headless --convert-to pdf --outdir "${outDir}" "${docxPath}"`;
+    const soffice = fs.existsSync(LOCAL_SOFFICE) ? LOCAL_SOFFICE : 'soffice';
+    // 独立用户配置目录，避免并行实例冲突
+    const profileDir = path.join(os.tmpdir(), `lo_profile_${profileId}`);
+    if (!fs.existsSync(profileDir)) fs.mkdirSync(profileDir, { recursive: true });
+    const cmd = `"${soffice}" -env:UserInstallation="file:///${profileDir.replace(/\\/g, '/')}" --headless --convert-to pdf --outdir "${outDir}" "${docxPath}"`;
     exec(cmd, { timeout: 30000 }, (err, stdout, stderr) => {
       if (err) return reject(new Error('LibreOffice转换失败: ' + (stderr || err.message)));
 
@@ -33,6 +41,42 @@ function libreofficeConvert(docxPath, pdfPath) {
       const generatedPdf = path.join(outDir, baseName + '.pdf');
       if (generatedPdf !== pdfPath && fs.existsSync(generatedPdf)) {
         fs.renameSync(generatedPdf, pdfPath);
+      }
+      // 清理临时配置目录
+      try { fs.rmSync(profileDir, { recursive: true, force: true }); } catch {}
+      resolve();
+    });
+  });
+}
+
+function libreofficeBatchConvert(pairs) {
+  return new Promise((resolve, reject) => {
+    const soffice = fs.existsSync(LOCAL_SOFFICE) ? LOCAL_SOFFICE : 'soffice';
+    const profileDir = path.join(os.tmpdir(), `lo_profile_batch_${Date.now()}`);
+
+    // 统一的输出目录（所有 PDF 生成在同一目录，方便批量操作）
+    const outDir = path.dirname(pairs[0].docx);
+    const fileArgs = pairs.map(p => `"${p.docx}"`).join(' ');
+    const cmd = `"${soffice}" -env:UserInstallation="file:///${profileDir.replace(/\\/g, '/')}" --headless --convert-to pdf --outdir "${outDir}" ${fileArgs}`;
+
+    exec(cmd, { timeout: 120000 }, (err, stdout, stderr) => {
+      // LibreOffice 输出 PDF 名与 docx 同名，需逐个确认/重命名
+      for (const { docx, pdf } of pairs) {
+        const baseName = path.basename(docx, '.docx');
+        const generatedPdf = path.join(outDir, baseName + '.pdf');
+        if (generatedPdf !== pdf && fs.existsSync(generatedPdf)) {
+          try { fs.renameSync(generatedPdf, pdf); } catch {}
+        }
+      }
+
+      // 清理
+      try { fs.rmSync(profileDir, { recursive: true, force: true }); } catch {}
+
+      if (err) {
+        const missing = pairs.filter(p => !fs.existsSync(p.pdf));
+        if (missing.length === pairs.length) {
+          return reject(new Error('LibreOffice批量转换失败: ' + (stderr || err.message)));
+        }
       }
       resolve();
     });
@@ -77,9 +121,8 @@ async function batchDocxToPdf(pairs, converter = 'auto') {
   }
 
   if (converter === 'libreoffice') {
-    for (const { docx, pdf } of pairs) {
-      await libreofficeConvert(docx, pdf);
-    }
+    // 单次调用批量转换：所有 docx 放入同一目录，一次 LibreOffice 启动全部转换
+    await libreofficeBatchConvert(pairs);
   } else {
     await wordComBatchConvert(pairs);
   }

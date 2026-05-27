@@ -47,6 +47,12 @@ const routes = [
         name: 'RecordEdit',
         component: () => import('../views/record/Input.vue'),
         meta: { title: '录入原始记录' }
+      },
+      {
+        path: 'instruments',
+        name: 'InstrumentList',
+        component: () => import('../views/instrument/List.vue'),
+        meta: { title: '仪器库' }
       }
     ]
   }

@@ -1,12 +1,18 @@
 <template>
-  <div class="page">
+  <div class="page-container">
     <div class="page-header">
       <h3>新建委托</h3>
+      <el-button @click="$router.back()">返回列表</el-button>
     </div>
 
     <!-- 步骤 1: 选择委托类型 -->
-    <el-card shadow="never" class="type-card">
-      <template #header><strong>选择委托项目</strong></template>
+    <el-card shadow="never" class="section-card">
+      <template #header>
+        <div class="card-header">
+          <span class="step-badge">1</span>
+          <strong>选择委托项目</strong>
+        </div>
+      </template>
       <div class="type-options">
         <div
           v-for="t in entrustTypes"
@@ -15,20 +21,34 @@
           :class="{ active: selectedType === t.code }"
           @click="selectType(t.code)"
         >
-          <el-icon :size="28"><component :is="t.icon" /></el-icon>
-          <span>{{ t.label }}</span>
-          <span class="type-code">{{ t.code }}</span>
+          <div class="type-icon" :class="t.colorClass">
+            <el-icon :size="32"><component :is="t.icon" /></el-icon>
+          </div>
+          <div class="type-info">
+            <span class="type-label">{{ t.label }}</span>
+            <span class="type-desc">{{ t.desc }}</span>
+          </div>
+          <div v-if="selectedType === t.code" class="type-check">
+            <el-icon :size="20"><CircleCheck /></el-icon>
+          </div>
         </div>
       </div>
     </el-card>
 
     <!-- 步骤 2: 关联工程 -->
     <el-card shadow="never" class="section-card" v-if="selectedType">
-      <template #header><strong>关联工程</strong></template>
+      <template #header>
+        <div class="card-header">
+          <span class="step-badge">2</span>
+          <strong>关联工程</strong>
+        </div>
+      </template>
       <el-form :inline="true">
         <el-form-item label="工程编号">
           <el-input v-model="projectSearch" placeholder="输入工程编号" style="width:160px"
-            @change="searchProject" />
+            @change="searchProject">
+            <template #prefix><el-icon><Search /></el-icon></template>
+          </el-input>
         </el-form-item>
         <el-form-item label="工程名称">
           <el-select
@@ -69,8 +89,13 @@
     <!-- 压实度委托表单 -->
     <template v-if="selectedType === 'SYS'">
       <el-card shadow="never" class="section-card">
-        <template #header><strong>压实度类型</strong></template>
-        <el-radio-group v-model="compactionType">
+        <template #header>
+          <div class="card-header">
+            <span class="step-badge">3</span>
+            <strong>压实度类型</strong>
+          </div>
+        </template>
+        <el-radio-group v-model="compactionType" size="large">
           <el-radio-button value="管道压实度">管道压实度</el-radio-button>
           <el-radio-button value="路基压实度">路基压实度</el-radio-button>
         </el-radio-group>
@@ -79,14 +104,17 @@
       <!-- 管道压实度 -->
       <el-card shadow="never" class="section-card" v-if="compactionType === '管道压实度'">
         <template #header>
-          <strong>管道压实度检测部位</strong>
-          <el-button type="primary" size="small" style="margin-left:12px" @click="addPosition">添加部位</el-button>
+          <div class="card-header">
+            <strong>管道压实度 — 检测部位</strong>
+            <el-button type="primary" size="small" @click="addPosition">
+              <el-icon style="margin-right:4px"><Plus /></el-icon>添加部位
+            </el-button>
+          </div>
         </template>
         <el-table :data="pipeItems" border>
-          <el-table-column prop="position_name" label="检测部位" width="180">
-            <template #default="{ row, $index }">
-              <el-input v-if="row._custom" v-model="row.position_name" placeholder="输入部位名称" size="small" />
-              <span v-else>{{ row.position_name }}</span>
+          <el-table-column label="检测部位" width="180">
+            <template #default="{ row }">
+              <el-input v-model="row.position_name" placeholder="输入部位名称" size="small" />
             </template>
           </el-table-column>
           <el-table-column label="检测数量(组)" width="140">
@@ -98,21 +126,28 @@
             <template #default="{ row }">
               <el-select v-model="row.material" placeholder="选择材料" size="small" style="width:160px"
                 filterable allow-create>
-                <el-option
-                  v-for="m in materialOptions"
-                  :key="m"
-                  :label="m"
-                  :value="m"
-                />
+                <el-option v-for="m in materialOptions" :key="m" :label="m" :value="m" />
               </el-select>
             </template>
           </el-table-column>
-          <el-table-column label="设计要求(%)" width="140">
+          <el-table-column label="设计要求" width="260">
             <template #default="{ row }">
-              <el-input-number v-model="row.design_requirement" :min="0" :max="100" :precision="1" size="small" />
+              <div style="display:flex;align-items:center;gap:4px">
+                <el-select v-model="row.design_operator" size="small" style="width:60px">
+                  <el-option label="≥" value="≥" /><el-option label="≤" value="≤" />
+                  <el-option label="=" value="=" /><el-option label="±" value="±" />
+                </el-select>
+                <el-input-number v-model="row.design_requirement" :min="0" :max="100" :precision="1" size="small" style="width:80px" />
+                <template v-if="row.design_operator === '±'">
+                  <span style="font-size:12px;color:#999">±</span>
+                  <el-input-number v-model="row.design_tolerance" :min="0" :max="50" :precision="1" size="small" style="width:70px" />
+                  <span style="font-size:12px;color:#999">%</span>
+                </template>
+                <span v-else style="font-size:12px;color:#999">%</span>
+              </div>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="100">
+          <el-table-column label="操作" width="80">
             <template #default="{ $index }">
               <el-button link type="danger" @click="removePipeItem($index)">删除</el-button>
             </template>
@@ -123,14 +158,17 @@
       <!-- 路基压实度 -->
       <el-card shadow="never" class="section-card" v-if="compactionType === '路基压实度'">
         <template #header>
-          <strong>路基压实度检测部位</strong>
-          <el-button type="primary" size="small" style="margin-left:12px" @click="addRoadPosition">添加部位</el-button>
+          <div class="card-header">
+            <strong>路基压实度 — 检测部位</strong>
+            <el-button type="primary" size="small" @click="addRoadPosition">
+              <el-icon style="margin-right:4px"><Plus /></el-icon>添加部位
+            </el-button>
+          </div>
         </template>
         <el-table :data="roadItems" border>
-          <el-table-column prop="position_name" label="检测部位" width="180">
-            <template #default="{ row, $index }">
-              <el-input v-if="row._customPos" v-model="row.position_name" placeholder="输入部位名称" size="small" />
-              <span v-else>{{ row.position_name }}</span>
+          <el-table-column label="检测部位" width="180">
+            <template #default="{ row }">
+              <el-input v-model="row.position_name" placeholder="输入部位名称" size="small" />
             </template>
           </el-table-column>
           <el-table-column label="检测数量(组)" width="140">
@@ -148,12 +186,24 @@
               </el-select>
             </template>
           </el-table-column>
-          <el-table-column label="设计要求(%)" width="140">
+          <el-table-column label="设计要求" width="260">
             <template #default="{ row }">
-              <el-input-number v-model="row.design_requirement" :min="0" :max="100" :precision="1" size="small" />
+              <div style="display:flex;align-items:center;gap:4px">
+                <el-select v-model="row.design_operator" size="small" style="width:60px">
+                  <el-option label="≥" value="≥" /><el-option label="≤" value="≤" />
+                  <el-option label="=" value="=" /><el-option label="±" value="±" />
+                </el-select>
+                <el-input-number v-model="row.design_requirement" :min="0" :max="100" :precision="1" size="small" style="width:80px" />
+                <template v-if="row.design_operator === '±'">
+                  <span style="font-size:12px;color:#999">±</span>
+                  <el-input-number v-model="row.design_tolerance" :min="0" :max="50" :precision="1" size="small" style="width:70px" />
+                  <span style="font-size:12px;color:#999">%</span>
+                </template>
+                <span v-else style="font-size:12px;color:#999">%</span>
+              </div>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="100">
+          <el-table-column label="操作" width="80">
             <template #default="{ $index }">
               <el-button link type="danger" @click="removeRoadItem($index)">删除</el-button>
             </template>
@@ -165,7 +215,12 @@
     <!-- 击实委托表单 -->
     <template v-if="selectedType === 'STJ'">
       <el-card shadow="never" class="section-card">
-        <template #header><strong>击实检测详情</strong></template>
+        <template #header>
+          <div class="card-header">
+            <span class="step-badge">3</span>
+            <strong>击实检测详情</strong>
+          </div>
+        </template>
         <el-form label-width="100px">
           <el-form-item label="材料">
             <el-select v-model="proctorItem.material" placeholder="选择材料" style="width:240px"
@@ -191,12 +246,17 @@
     <template v-if="selectedType === 'SWC'">
       <el-card shadow="never" class="section-card">
         <template #header>
-          <strong>弯沉检测部位</strong>
-          <el-button type="primary" size="small" style="margin-left:12px" @click="addDeflectionItem">添加部位</el-button>
+          <div class="card-header">
+            <span class="step-badge">3</span>
+            <strong>弯沉检测部位</strong>
+            <el-button type="primary" size="small" @click="addDeflectionItem">
+              <el-icon style="margin-right:4px"><Plus /></el-icon>添加部位
+            </el-button>
+          </div>
         </template>
         <el-table :data="deflectionItems" border>
           <el-table-column label="检测部位" width="220">
-            <template #default="{ row, $index }">
+            <template #default="{ row }">
               <el-input v-if="row._custom" v-model="row.position_name" placeholder="输入部位名称" size="small" />
               <span v-else>{{ row.position_name }}</span>
             </template>
@@ -206,7 +266,7 @@
               <el-input-number v-model="row.design_requirement" :min="0" :precision="1" size="small" />
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="100">
+          <el-table-column label="操作" width="80">
             <template #default="{ $index }">
               <el-button link type="danger" @click="removeDeflectionItem($index)">删除</el-button>
             </template>
@@ -225,8 +285,9 @@
           <el-input v-model="remark" placeholder="备注" style="width:300px" />
         </el-form-item>
       </el-form>
-      <div style="margin-top:12px">
+      <div style="margin-top:16px;display:flex;gap:12px">
         <el-button type="primary" size="large" :loading="submitting" @click="handleSubmit">
+          <el-icon style="margin-right:4px"><Check /></el-icon>
           提交委托
         </el-button>
         <el-button size="large" @click="$router.back()">取消</el-button>
@@ -247,9 +308,9 @@ const router = useRouter()
 const submitting = ref(false)
 
 const entrustTypes = [
-  { code: 'SYS', label: '压实度', icon: 'Histogram' },
-  { code: 'STJ', label: '击实', icon: 'Box' },
-  { code: 'SWC', label: '弯沉', icon: 'TrendCharts' }
+  { code: 'SYS', label: '压实度', desc: '灌砂法检测压实度', icon: 'Histogram', colorClass: 'blue' },
+  { code: 'STJ', label: '击实', desc: '击实试验检测', icon: 'Box', colorClass: 'orange' },
+  { code: 'SWC', label: '弯沉', desc: '弯沉值检测', icon: 'TrendCharts', colorClass: 'green' }
 ]
 
 const materialOptions = ['砂', '石屑', '碎石']
@@ -267,14 +328,14 @@ const projectLoading = ref(false)
 
 // 管道压实度
 const pipeItems = reactive([
-  { position_name: '管底', group_count: 1, material: '砂', design_requirement: 90, sort: 1 },
-  { position_name: '胸腔', group_count: 2, material: '砂', design_requirement: 90, sort: 2 },
-  { position_name: '管顶', group_count: 1, material: '砂', design_requirement: 90, sort: 3 }
+  { position_name: '管底', group_count: 1, material: '砂', design_requirement: 90, design_operator: '≥', design_tolerance: null, sort: 1 },
+  { position_name: '胸腔', group_count: 2, material: '砂', design_requirement: 90, design_operator: '≥', design_tolerance: null, sort: 2 },
+  { position_name: '管顶', group_count: 1, material: '砂', design_requirement: 90, design_operator: '≥', design_tolerance: null, sort: 3 }
 ])
 
 // 路基压实度
 const roadItems = reactive([
-  { position_name: '车道', group_count: 1, material: '砂', design_requirement: 90, sort: 1, _customPos: false }
+  { position_name: '车道', group_count: 1, material: '砂', design_requirement: 90, design_operator: '≥', design_tolerance: null, sort: 1 }
 ])
 
 // 击实
@@ -319,16 +380,15 @@ function onProjectSelect(id) {
 }
 
 function addPosition() {
-  pipeItems.push({ position_name: '', group_count: 1, material: '砂', design_requirement: 90, sort: pipeItems.length + 1, _custom: true })
+  pipeItems.push({ position_name: '', group_count: 1, material: '砂', design_requirement: 90, design_operator: '≥', design_tolerance: null, sort: pipeItems.length + 1 })
 }
 
 function removePipeItem(idx) {
-  if (pipeItems.length <= 3) return
   pipeItems.splice(idx, 1)
 }
 
 function addRoadPosition() {
-  roadItems.push({ position_name: '', group_count: 1, material: '砂', design_requirement: 90, sort: roadItems.length + 1, _customPos: true })
+  roadItems.push({ position_name: '', group_count: 1, material: '砂', design_requirement: 90, design_operator: '≥', design_tolerance: null, sort: roadItems.length + 1 })
 }
 
 function removeRoadItem(idx) {
@@ -361,6 +421,8 @@ async function handleSubmit() {
       group_count: it.group_count,
       material: it.material,
       design_requirement: it.design_requirement,
+      design_operator: it.design_operator || '≥',
+      design_tolerance: it.design_operator === '±' ? it.design_tolerance : null,
       sort: i + 1
     }))
   } else if (selectedType.value === 'STJ') {
@@ -393,25 +455,95 @@ async function handleSubmit() {
 </script>
 
 <style scoped>
-.page { padding: 0; }
-.page-header { margin-bottom: 16px; }
-.page-header h3 { margin: 0; }
-.type-card { margin-bottom: 16px; }
-.type-options { display: flex; gap: 24px; }
+.section-card { margin-bottom: var(--spacing-md); }
+
+.card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.step-badge {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.type-options {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+}
+
 .type-item {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 20px 32px;
-  border: 2px solid #dcdfe6;
-  border-radius: 8px;
+  gap: 10px;
+  padding: 28px 24px;
+  border: 2px solid var(--color-border);
+  border-radius: 12px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.25s;
+  position: relative;
 }
-.type-item:hover { border-color: #409eff; }
-.type-item.active { border-color: #409eff; background: #ecf5ff; }
-.type-code { font-size: 12px; color: #909399; }
-.section-card { margin-bottom: 16px; }
+
+.type-item:hover {
+  border-color: var(--color-primary-light);
+  box-shadow: 0 4px 16px rgba(26, 95, 180, 0.1);
+  transform: translateY(-2px);
+}
+
+.type-item.active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-bg);
+  box-shadow: 0 4px 20px rgba(26, 95, 180, 0.15);
+}
+
+.type-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.type-icon.blue { background: #ecf2fb; color: var(--color-primary); }
+.type-icon.orange { background: #fef3e1; color: var(--color-warning); }
+.type-icon.green { background: #e8f5ee; color: var(--color-success); }
+
+.type-info {
+  text-align: center;
+}
+
+.type-label {
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.type-desc {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin-top: 2px;
+}
+
+.type-check {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  color: var(--color-primary);
+}
+
 .project-info { margin-top: 12px; }
 </style>

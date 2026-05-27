@@ -19,7 +19,8 @@ exports.list = async (req, res) => {
     const total = countResult[0].total;
 
     const [rows] = query(
-      `SELECT e.*, p.project_no, p.project_name, p.client_unit, p.client_person, p.supervision_unit, p.witness_person, p.construction_unit, p.build_unit
+      `SELECT e.*, p.project_no, p.project_name, p.client_unit, p.client_person, p.supervision_unit, p.witness_person, p.construction_unit, p.build_unit,
+              (SELECT COALESCE(SUM(group_count), 0) FROM biz_compaction_item WHERE entrust_id = e.id) AS total_groups
        FROM biz_entrust e
        LEFT JOIN biz_project p ON e.project_id = p.id
        ${where}
@@ -51,9 +52,9 @@ exports.create = async (req, res) => {
       if (category_code === 'SYS') {
         for (const item of items) {
           query(
-            `INSERT INTO biz_compaction_item (entrust_id, position_name, group_count, material, design_requirement, sort)
-             VALUES (?, ?, ?, ?, ?, ?)`,
-            [entrustId, item.position_name, item.group_count, item.material, item.design_requirement || 90, item.sort || 1]
+            `INSERT INTO biz_compaction_item (entrust_id, position_name, group_count, material, design_requirement, design_operator, design_tolerance, sort)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [entrustId, item.position_name, item.group_count, item.material, item.design_requirement || 90, item.design_operator || '≥', item.design_tolerance || null, item.sort || 1]
           );
         }
       } else if (category_code === 'STJ') {
@@ -121,10 +122,10 @@ exports.update = async (req, res) => {
   try {
     const db = getDb();
     const { id } = req.params;
-    const { project_id, entrust_date, items = [], remark } = req.body;
+    const { entrust_no, project_id, entrust_date, items = [], remark } = req.body;
 
     const doUpdate = db.transaction(() => {
-      const [rows] = query('SELECT category_code FROM biz_entrust WHERE id = ?', [id]);
+      const [rows] = query('SELECT * FROM biz_entrust WHERE id = ?', [id]);
       const categoryCode = rows[0].category_code;
 
       if (categoryCode === 'SYS') {
@@ -138,9 +139,9 @@ exports.update = async (req, res) => {
       if (categoryCode === 'SYS') {
         for (const item of items) {
           query(
-            `INSERT INTO biz_compaction_item (entrust_id, position_name, group_count, material, design_requirement, sort)
-             VALUES (?, ?, ?, ?, ?, ?)`,
-            [id, item.position_name, item.group_count, item.material, item.design_requirement || 90, item.sort || 1]
+            `INSERT INTO biz_compaction_item (entrust_id, position_name, group_count, material, design_requirement, design_operator, design_tolerance, sort)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [id, item.position_name, item.group_count, item.material, item.design_requirement || 90, item.design_operator || '≥', item.design_tolerance || null, item.sort || 1]
           );
         }
       } else if (categoryCode === 'STJ') {
@@ -160,8 +161,8 @@ exports.update = async (req, res) => {
       }
 
       query(
-        "UPDATE biz_entrust SET project_id=?, entrust_date=?, remark=?, update_time=datetime('now','localtime') WHERE id=?",
-        [project_id || null, entrust_date, remark || null, id]
+        "UPDATE biz_entrust SET entrust_no=?, project_id=?, entrust_date=?, remark=?, update_time=datetime('now','localtime') WHERE id=?",
+        [entrust_no || rows[0].entrust_no, project_id || null, entrust_date, remark || null, id]
       );
     });
 
@@ -182,6 +183,13 @@ exports.del = async (req, res) => {
       const [rows] = query('SELECT category_code FROM biz_entrust WHERE id = ?', [id]);
       if (rows.length === 0) throw new Error('NOT_FOUND');
       const categoryCode = rows[0].category_code;
+
+      // 级联删除原始记录
+      const [records] = query('SELECT id FROM biz_original_record WHERE entrust_id = ?', [id]);
+      for (const rec of records) {
+        query('DELETE FROM biz_original_record_item WHERE record_id = ?', [rec.id]);
+      }
+      query('DELETE FROM biz_original_record WHERE entrust_id = ?', [id]);
 
       if (categoryCode === 'SYS') {
         query('DELETE FROM biz_compaction_item WHERE entrust_id = ?', [id]);

@@ -53,11 +53,11 @@ exports.create = async (req, res) => {
 exports.update = async (req, res) => {
   try {
     const { id } = req.params;
-    const { project_name, client_unit, client_person, supervision_unit, witness_person, construction_unit, build_unit, remark } = req.body;
+    const { project_no, project_name, client_unit, client_person, supervision_unit, witness_person, construction_unit, build_unit, remark } = req.body;
     query(
-      `UPDATE biz_project SET project_name=?, client_unit=?, client_person=?, supervision_unit=?, witness_person=?, construction_unit=?, build_unit=?, remark=?, update_time=datetime('now','localtime')
+      `UPDATE biz_project SET project_no=?, project_name=?, client_unit=?, client_person=?, supervision_unit=?, witness_person=?, construction_unit=?, build_unit=?, remark=?, update_time=datetime('now','localtime')
        WHERE id=?`,
-      [project_name, client_unit, client_person, supervision_unit, witness_person, construction_unit, build_unit, remark || null, id]
+      [project_no, project_name, client_unit, client_person, supervision_unit, witness_person, construction_unit, build_unit, remark || null, id]
     );
     res.json({ code: 200, message: '更新成功' });
   } catch (err) {
