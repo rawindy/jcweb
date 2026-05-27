@@ -45,7 +45,7 @@
         <el-table-column prop="entrust_date" label="委托日期" width="120" />
         <el-table-column label="操作" width="160" fixed="right">
           <template #default="{ row }">
-            <el-button type="primary" link @click="$router.push(`/record/${row.id}`)">
+            <el-button type="primary" link @click="$router.push(`/record/${row.entrust_no}`)">
               <el-icon style="margin-right:2px"><EditPen /></el-icon>
               录入原始记录
             </el-button>

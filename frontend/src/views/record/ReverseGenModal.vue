@@ -40,37 +40,14 @@
       <el-main style="padding:0;overflow-y:auto">
         <el-card shadow="never" class="param-card">
           <template #header><span class="card-title">随机参数范围</span></template>
-          <div class="param-grid">
-            <div class="param-item">
-              <label>压实度(%)</label>
-              <div class="range-row">
-                <el-input-number v-model="range.compactionMin" :min="50" :max="100" :precision="1" size="small" controls-position="right" />
-                <span>~</span>
-                <el-input-number v-model="range.compactionMax" :min="50" :max="100" :precision="1" size="small" controls-position="right" />
-              </div>
-            </div>
-            <div class="param-item">
-              <label>含水率(%)</label>
-              <div class="range-row">
-                <el-input-number v-model="range.waterMin" :min="0" :max="50" :precision="1" size="small" controls-position="right" />
-                <span>~</span>
-                <el-input-number v-model="range.waterMax" :min="0" :max="50" :precision="1" size="small" controls-position="right" />
-              </div>
-            </div>
+          <!-- 通用参数 -->
+          <div class="global-params">
             <div class="param-item">
               <label>湿料质量(g)</label>
               <div class="range-row">
                 <el-input-number v-model="range.wetMassMin" :min="1000" :max="15000" size="small" controls-position="right" />
                 <span>~</span>
                 <el-input-number v-model="range.wetMassMax" :min="1000" :max="15000" size="small" controls-position="right" />
-              </div>
-            </div>
-            <div class="param-item">
-              <label>锥体砂质量(g)</label>
-              <div class="range-row">
-                <el-input-number v-model="range.surfaceMin" :min="100" :max="1500" size="small" controls-position="right" />
-                <span>~</span>
-                <el-input-number v-model="range.surfaceMax" :min="100" :max="1500" size="small" controls-position="right" />
               </div>
             </div>
             <div class="param-item">
@@ -89,10 +66,50 @@
               <label>量砂堆积密度(g/cm³)</label>
               <el-input-number v-model="fixed.sandDensity" :min="0.1" :max="3" :precision="2" :step="0.01" size="small" controls-position="right" />
             </div>
-            <div class="param-item param-btns">
-              <el-button type="warning" size="small" @click="doRandomize">随机生成</el-button>
-              <el-button size="small" @click="doRandomBoxes">随机盒号</el-button>
-            </div>
+          </div>
+
+          <!-- 智能匹配区间（可编辑） -->
+          <div class="match-section" v-if="matchRules.length > 0">
+            <span class="match-label">智能匹配区间（可修改）</span>
+            <table class="match-table">
+              <thead>
+                <tr>
+                  <th>部位</th>
+                  <th>材料</th>
+                  <th>设计要求</th>
+                  <th>压实度区间</th>
+                  <th>含水率区间</th>
+                  <th>锥体砂质量</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(r, i) in matchRules" :key="i">
+                  <td>{{ r.position }}</td>
+                  <td>{{ r.material }}</td>
+                  <td>{{ r.designLabel }}</td>
+                  <td class="editable-cell">
+                    <el-input-number v-model="r.compMin" :min="50" :max="100" :precision="1" size="small" controls-position="right" style="width:82px" />
+                    <span>~</span>
+                    <el-input-number v-model="r.compMax" :min="50" :max="100" :precision="1" size="small" controls-position="right" style="width:82px" />
+                  </td>
+                  <td class="editable-cell">
+                    <el-input-number v-model="r.waterMin" :min="0" :max="50" :precision="1" size="small" controls-position="right" style="width:82px" />
+                    <span>~</span>
+                    <el-input-number v-model="r.waterMax" :min="0" :max="50" :precision="1" size="small" controls-position="right" style="width:82px" />
+                  </td>
+                  <td class="editable-cell">
+                    <el-input-number v-model="r.sandMin" :min="100" :max="1500" size="small" controls-position="right" style="width:82px" />
+                    <span>~</span>
+                    <el-input-number v-model="r.sandMax" :min="100" :max="1500" size="small" controls-position="right" style="width:82px" />
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div style="margin-top:12px;display:flex;gap:8px">
+            <el-button type="warning" size="small" @click="doRandomize">随机生成</el-button>
+            <el-button size="small" @click="doRandomBoxes">随机盒号</el-button>
           </div>
         </el-card>
 
@@ -290,17 +307,60 @@ watch(visible, async (v) => {
   if (v) {
     dialogWidth.value = Math.max(window.innerWidth * 0.95, 1000)
     dialogHeight.value = Math.max(window.innerHeight * 0.85, 500)
+    // 刷新智能匹配规则（切换委托时更新）并重建 genData
+    const newRules = buildMatchRules()
+    matchRules.splice(0, matchRules.length, ...newRules)
     await loadInstruments()
-    const all = props.allRows || props.currentPageRows || []
-    if (genData.value.length !== all.length) {
-      initGenData()
-    }
+    initGenData()
   }
 })
 
 // ===== 参数范围（使用模块级持久状态）=====
 const range = savedRange
 const fixed = savedFixed
+
+// 从委托明细项提取智能匹配规则（可编辑）
+function buildMatchRules() {
+  const items = props.entrustItems || []
+  const seen = new Set()
+  const rules = []
+  for (const item of items) {
+    const key = `${item.position_name}|${item.material}|${item.design_operator}|${item.design_requirement}|${item.design_tolerance}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    const cr = getCompactionRange(item)
+    const wr = getWaterRange(item)
+    const ss = getSandSurfaceRange(item)
+    rules.push({
+      _key: key,
+      position: item.position_name || '',
+      material: item.material || '',
+      designLabel: (() => {
+        const op = item.design_operator || '≥'
+        const req = item.design_requirement != null ? item.design_requirement : ''
+        const tol = item.design_tolerance
+        if (op === '±' && tol != null) return `${req}%±${tol}%`
+        return `${op}${req}%`
+      })(),
+      compMin: cr.min, compMax: cr.max,
+      waterMin: wr.min, waterMax: wr.max,
+      sandIsFixed: typeof ss === 'number',
+      sandMin: typeof ss === 'number' ? ss : (ss ? ss.min : range.surfaceMin),
+      sandMax: typeof ss === 'number' ? ss : (ss ? ss.max : range.surfaceMax)
+    })
+  }
+  return rules
+}
+
+const matchRules = reactive(buildMatchRules())
+
+// 根据样品索引查找对应的匹配规则
+function getRuleForIndex(idx) {
+  const item = getEntrustItemForIndex(idx)
+  if (!item) return null
+  const key = `${item.position_name}|${item.material}|${item.design_operator}|${item.design_requirement}|${item.design_tolerance}`
+  return matchRules.find(r => r._key === key) || null
+}
 
 const cellColors = {
   compaction:    '#fef0c7', water_content: '#fef0c7', wet_mass: '#fef0c7',
@@ -442,25 +502,20 @@ function doRandomize() {
   if (genData.value.length === 0) return
   for (let i = 0; i < genData.value.length; i++) {
     const row = genData.value[i]
-    const item = getEntrustItemForIndex(i)
+    const rule = getRuleForIndex(i)
 
-    const cr = getCompactionRange(item)
-    row.compaction = rand(cr.min, cr.max, 1)
-
-    const wr = getWaterRange(item)
-    row.water_content = rand(wr.min, wr.max, 1)
-
-    row.wet_mass = rand(range.wetMassMin, range.wetMassMax, 0)
-
-    const ss = getSandSurfaceRange(item)
-    if (typeof ss === 'number') {
-      row.sand_surface = ss
-    } else if (ss) {
-      row.sand_surface = rand(ss.min, ss.max, 0)
+    if (rule) {
+      row.compaction = rand(rule.compMin, rule.compMax, 1)
+      row.water_content = rand(rule.waterMin, rule.waterMax, 1)
+      row.sand_surface = rand(rule.sandMin, rule.sandMax, 0)
     } else {
+      // 回退到全局范围
+      row.compaction = rand(range.compactionMin, range.compactionMax, 1)
+      row.water_content = rand(range.waterMin, range.waterMax, 1)
       row.sand_surface = rand(range.surfaceMin, range.surfaceMax, 0)
     }
 
+    row.wet_mass = rand(range.wetMassMin, range.wetMassMax, 0)
     row.loss_mass = rand(range.lossMin, range.lossMax, 0)
     row.sand_before = fixed.sandBefore
     row.sand_density = fixed.sandDensity
@@ -599,14 +654,24 @@ onBeforeUnmount(() => {
 /* 卡片统一 */
 .card-title { font-size: 14px; font-weight: 600; }
 
-/* 参数网格 */
+/* 参数卡片 */
 .param-card { margin-bottom: 12px; }
-.param-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px 12px; }
+
+/* 通用参数 */
+.global-params { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px 12px; margin-bottom: 12px; }
 .param-item { }
 .param-item label { display: block; font-size: 13px; color: #606266; margin-bottom: 4px; }
 .param-item .range-row { display: flex; gap: 4px; align-items: center; }
 .param-item .range-row > span { color: #909399; font-size: 13px; }
-.param-btns { display: flex; align-items: flex-end; gap: 8px; }
+
+/* 智能匹配规则表 */
+.match-section { margin-top: 8px; padding-top: 12px; border-top: 1px dashed #dcdfe6; }
+.match-label { font-size: 13px; color: #409eff; font-weight: 500; margin-bottom: 8px; display: block; }
+.match-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
+.match-table th { background: #ecf5ff; padding: 5px 6px; border: 1px solid #dcdfe6; font-weight: 600; color: #303133; white-space: nowrap; }
+.match-table td { padding: 3px 6px; border: 1px solid #dcdfe6; text-align: center; color: #606266; }
+.editable-cell { white-space: nowrap; }
+.editable-cell > span { color: #909399; font-size: 12px; margin: 0 2px; }
 
 /* 图例 */
 .legend-bar { display: flex; gap: 16px; margin-bottom: 8px; font-size: 12px; padding: 0 4px; color: #606266; }

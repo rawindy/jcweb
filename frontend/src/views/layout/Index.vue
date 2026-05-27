@@ -25,6 +25,10 @@
           <el-icon><Tickets /></el-icon>
           <template #title>原始记录录入</template>
         </el-menu-item>
+        <el-menu-item index="/print">
+          <el-icon><DocumentChecked /></el-icon>
+          <template #title>报告打印</template>
+        </el-menu-item>
         <el-menu-item index="/instruments">
           <el-icon><Box /></el-icon>
           <template #title>仪器库</template>
@@ -94,6 +98,7 @@ const activeMenu = computed(() => {
   if (p.startsWith('/project')) return '/project'
   if (p.startsWith('/entrust')) return '/entrust'
   if (p.startsWith('/record')) return '/record'
+  if (p.startsWith('/print')) return '/print'
   if (p.startsWith('/instruments')) return '/instruments'
   return p
 })

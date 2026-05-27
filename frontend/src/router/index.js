@@ -43,7 +43,7 @@ const routes = [
         meta: { title: '原始记录录入' }
       },
       {
-        path: 'record/:entrustId',
+        path: 'record/:entrustNo',
         name: 'RecordEdit',
         component: () => import('../views/record/Input.vue'),
         meta: { title: '录入原始记录' }
@@ -53,6 +53,12 @@ const routes = [
         name: 'InstrumentList',
         component: () => import('../views/instrument/List.vue'),
         meta: { title: '仪器库' }
+      },
+      {
+        path: 'print',
+        name: 'ReportPrint',
+        component: () => import('../views/print/Index.vue'),
+        meta: { title: '报告打印' }
       }
     ]
   }

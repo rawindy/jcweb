@@ -6,21 +6,23 @@ const { query, getDb } = require('../config/db');
 const { generateSampleNos } = require('../utils/codeGenerator');
 const { batchDocxToPdf } = require('../utils/pdfConverter');
 const { bankersRound } = require('../utils/rounding');
+const { injectComputedValues } = require('../utils/compaction');
 
 exports.getRecords = async (req, res) => {
   try {
-    const { id: entrustId } = req.params;
+    const { entrustNo } = req.params;
     const [entrusts] = query(
       `SELECT e.*, p.project_no, p.project_name, p.client_unit, p.client_person,
               p.supervision_unit, p.witness_person, p.construction_unit, p.build_unit
        FROM biz_entrust e
        LEFT JOIN biz_project p ON e.project_id = p.id
-       WHERE e.id = ?`, [entrustId]
+       WHERE e.entrust_no = ?`, [entrustNo]
     );
     if (entrusts.length === 0) {
       return res.status(404).json({ code: 404, message: '委托单不存在' });
     }
     const entrust = entrusts[0];
+    const entrustId = entrust.id;
 
     let items = [];
     if (entrust.category_code === 'SYS') {
@@ -194,7 +196,10 @@ exports.getRecords = async (req, res) => {
 exports.updateRows = async (req, res) => {
   try {
     const db = getDb();
-    const { entrustId } = req.params;
+    const { entrustNo } = req.params;
+    const [entrusts] = query('SELECT id FROM biz_entrust WHERE entrust_no = ?', [entrustNo]);
+    if (entrusts.length === 0) return res.status(404).json({ code: 404, message: '委托单不存在' });
+    const entrustId = entrusts[0].id;
     const { rows } = req.body;
 
     const doUpdate = db.transaction(() => {
@@ -215,6 +220,8 @@ exports.updateRows = async (req, res) => {
         const extra = pageRows[0].extra || {};
         const remark = JSON.stringify(extra);
 
+        const maxDryDensities = extra.max_dry_densities || {};
+
         const [recordResult] = query(
           `INSERT INTO biz_original_record (entrust_id, page_no, total_pages, template_type, header_data, remark, create_time, update_time)
            VALUES (?, ?, ?, ?, ?, ?, datetime('now','localtime'), datetime('now','localtime'))`,
@@ -224,11 +231,24 @@ exports.updateRows = async (req, res) => {
         const recordId = recordResult.insertId;
 
         for (const row of pageRows) {
+          // 查找该行的最大干密度
+          let maxDry = 0;
+          const mat = row.test_values?.material || row.material || '';
+          if (mat && maxDryDensities[mat]) {
+            maxDry = parseFloat(maxDryDensities[mat]) || 0;
+          } else {
+            const vals = Object.values(maxDryDensities).filter(Boolean);
+            if (vals.length > 0) maxDry = parseFloat(vals[0]) || 0;
+          }
+
+          // 注入干密度和压实度到 test_values
+          const testValues = injectComputedValues(row.test_values || {}, maxDry);
+
           query(
             `INSERT INTO biz_original_record_item (record_id, seq_no, sample_no, position_name, layer, test_values)
              VALUES (?, ?, ?, ?, ?, ?)`,
             [recordId, row.seq_no, row.sample_no, row.position_name, row.layer,
-             JSON.stringify(row.test_values || {})]
+             JSON.stringify(testValues)]
           );
         }
       }
@@ -244,19 +264,20 @@ exports.updateRows = async (req, res) => {
 
 exports.printPdf = async (req, res) => {
   try {
-    const { id: entrustId } = req.params;
+    const { entrustNo } = req.params;
 
     // 1. 查询数据
     const [entrusts] = query(
       `SELECT e.*, p.project_no, p.project_name, p.client_unit, p.client_person,
               p.supervision_unit, p.witness_person, p.construction_unit, p.build_unit
        FROM biz_entrust e LEFT JOIN biz_project p ON e.project_id = p.id
-       WHERE e.id = ?`, [entrustId]
+       WHERE e.entrust_no = ?`, [entrustNo]
     );
     if (entrusts.length === 0) {
       return res.status(404).json({ code: 404, message: '委托单不存在' });
     }
     const entrust = entrusts[0];
+    const entrustId = entrust.id;
 
     const [savedRecords] = query(
       'SELECT * FROM biz_original_record WHERE entrust_id = ? ORDER BY page_no', [entrustId]
@@ -284,7 +305,6 @@ exports.printPdf = async (req, res) => {
     const materialStr = materials.join('、');
 
     const totalPages = Math.max(...savedRecords.map(r => r.total_pages || 1));
-    const entrustNo = entrust.entrust_no;
 
     // 从有数据的页中提取共享的 extra（多页共用同一表头信息）
     let sharedExtra = {};
@@ -434,14 +454,7 @@ exports.printPdf = async (req, res) => {
       xml = replaceAfterLabel(xml, '试验人：', sharedExtra.tester || '');
       xml = replaceAfterLabel(xml, '复核人：', sharedExtra.reviewer || '');
 
-      if (sharedExtra.test_date) {
-        const parts = String(sharedExtra.test_date).split(/[-/]/);
-        if (parts.length === 3) {
-          xml = replaceAfterLabel(xml, '试验日期：', parts[0]);
-          xml = replaceInRun(xml, '年', parts[1], true);
-          xml = replaceInRun(xml, '月', parts[2], true);
-        }
-      }
+      xml = fillTestDate(xml, sharedExtra.test_date);
 
       // 保存修改后的 docx
       zip.file('word/document.xml', xml);
@@ -517,10 +530,13 @@ function yield_() {
   return new Promise(resolve => setTimeout(resolve, 0));
 }
 
-// POST /:id/print/start — 启动打印任务
+// POST /:entrustNo/print/start — 启动打印任务
 exports.startPrint = async (req, res) => {
   try {
-    const { id: entrustId } = req.params;
+    const { entrustNo } = req.params;
+    const [entrusts] = query('SELECT id FROM biz_entrust WHERE entrust_no = ?', [entrustNo]);
+    if (entrusts.length === 0) return res.status(404).json({ code: 404, message: '委托单不存在' });
+    const entrustId = entrusts[0].id;
     const taskId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
     printJobs.set(taskId, { step: 0, totalSteps: 1, message: '准备中...', done: false, error: null, pdfPath: null });
@@ -565,10 +581,13 @@ exports.printDownload = (req, res) => {
 
 // ===== 空白记录单打印 =====
 
-// POST /:id/print/blank/start — 启动空白记录单打印任务
+// POST /:entrustNo/print/blank/start — 启动空白记录单打印任务
 exports.startPrintBlank = async (req, res) => {
   try {
-    const { id: entrustId } = req.params;
+    const { entrustNo } = req.params;
+    const [entrusts] = query('SELECT id FROM biz_entrust WHERE entrust_no = ?', [entrustNo]);
+    if (entrusts.length === 0) return res.status(404).json({ code: 404, message: '委托单不存在' });
+    const entrustId = entrusts[0].id;
     const taskId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
     printJobs.set(taskId, { step: 0, totalSteps: 1, message: '准备中...', done: false, error: null, pdfPath: null });
@@ -1159,7 +1178,33 @@ function fillDataRow(xml, label, values, startPos) {
   return { xml, nextPos: pos };
 }
 
-// 替换标签后的文本（同一段落内）
+// 格式化试验日期并填入 XML（支持单日期和日期范围）
+function fillTestDate(xml, dateStr) {
+  if (!dateStr) return xml;
+  const str = String(dateStr);
+  if (str.includes('~')) {
+    const [d1, d2] = str.split('~');
+    const p1 = d1.split('-'); const p2 = d2.split('-');
+    if (p1.length === 3 && p2.length === 3) {
+      const formatted = p1[0] === p2[0]
+        ? `${p1[0]}年${p1[1]}月${p1[2]}日～${p2[1]}月${p2[2]}日`
+        : `${p1[0]}年${p1[1]}月${p1[2]}日～${p2[0]}年${p2[1]}月${p2[2]}日`;
+      xml = replaceAfterLabel(xml, '试验日期：', formatted);
+      // 清除年/月/日占位符（填入空值）
+      xml = replaceAfterLabel(xml, '年', '');
+      xml = replaceAfterLabel(xml, '月', '');
+      xml = replaceAfterLabel(xml, '日', '');
+    }
+  } else {
+    const parts = str.split(/[-/]/);
+    if (parts.length === 3) {
+      xml = replaceAfterLabel(xml, '试验日期：', parts[0]);
+      xml = replaceInRun(xml, '年', parts[1], true);
+      xml = replaceInRun(xml, '月', parts[2], true);
+    }
+  }
+  return xml;
+}
 function replaceAfterLabel(xml, label, value) {
   // 找到标签所在的 w:t 元素，在其后的空格处插入值
   const pattern = `(<w:t[^>]*>${escXml(label)})(\\s*)(<\\/w:t>)`;

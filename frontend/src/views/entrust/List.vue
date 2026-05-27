@@ -81,7 +81,7 @@
         <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="$router.push(`/entrust/${row.id}`)">详情</el-button>
-            <el-button link type="primary" @click="$router.push(`/record/${row.id}`)">录入记录</el-button>
+            <el-button link type="primary" @click="$router.push(`/record/${row.entrust_no}`)">录入记录</el-button>
             <el-button link type="danger" @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>

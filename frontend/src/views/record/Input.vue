@@ -65,7 +65,7 @@
           </el-col>
           <el-col :span="14">
             <span class="lbl">结构材料：</span>
-            <el-input v-model="extra.structure_layer" size="small" style="width:200px" />
+            <el-input v-model="extra.structure_layer" size="small" style="width:300px" />
           </el-col>
         </el-row>
         <el-row :gutter="20" class="info-line" v-if="isPipeline">
@@ -85,7 +85,7 @@
           </el-col>
           <el-col :span="7">
             <span class="lbl">结构层次：</span>
-            <el-input v-model="extra.structure_layer" size="small" style="width:160px" />
+            <el-input v-model="extra.structure_layer" size="small" style="width:260px" />
           </el-col>
           <el-col :span="7">
             <span class="lbl">最大干密度：</span>
@@ -143,6 +143,8 @@
                     <input
                       :value="getGroupValue(def.key, group)"
                       @input="onGroupInput(def.key, group, $event)"
+                      @dblclick="def.key === 'stake_no' ? openStakeDialog() : null"
+                      @paste="handleCellPaste"
                       class="ci"
                       :data-row="ri"
                       :data-col="gi"
@@ -157,6 +159,8 @@
                     :class="{ 'calc-row': def.calc, 'result-row': def.result }">
                     <input v-if="!def.calc"
                       v-model="row.test_values[def.key]"
+                      @dblclick="def.key === 'stake_no' ? openStakeDialog() : null"
+                      @paste="handleCellPaste"
                       class="ci"
                       :data-row="ri"
                       :data-col="ci"
@@ -180,16 +184,50 @@
         <template #header><span class="card-title">其他信息</span></template>
         <el-form label-width="80px" size="small">
           <el-form-item label="检测结论">
-            <el-input v-model="extra.conclusion" />
+            <div style="display:flex;align-items:center;gap:8px">
+              <el-input v-model="extra.conclusion" :placeholder="autoConclusion" style="flex:1" />
+              <el-tag v-if="autoConclusion" :type="autoConclusion === '符合要求' ? 'success' : 'danger'" effect="dark">
+                {{ autoConclusion }}
+              </el-tag>
+            </div>
           </el-form-item>
           <el-form-item label="检测设备">
-            <span class="static-text">灌砂筒(    )（SB143） 电子秤（SB133）电热鼓风干燥箱（    ）电子秤（SB139）</span>
+            <div class="equipment-line">
+              <span>灌砂筒(</span>
+              <el-select v-model="extra.sand_cylinder" size="small" style="width:100px">
+                <el-option label="100mm" value="100mm" />
+                <el-option label="150mm" value="150mm" />
+                <el-option label="200mm" value="200mm" />
+              </el-select>
+              <span>)（SB143） 电子秤（SB133）电热鼓风干燥箱（</span>
+              <el-checkbox-group v-model="extra.drying_oven" size="small" class="inline-checkbox-group">
+                <el-checkbox label="SB55" />
+                <el-checkbox label="SB56" />
+                <el-checkbox label="SB128" />
+                <el-checkbox label="SB227" />
+              </el-checkbox-group>
+              <span>）电子秤（SB139）</span>
+            </div>
           </el-form-item>
           <el-form-item label="检测依据">
-            <span class="static-text">□《公路路基路面现场测试规程》JTG 3450-2019 □《土工试验方法标准》GB/T 50123-2019</span>
-          </el-form-item>
-          <el-form-item label=" ">
-            <span class="static-text">□《城镇道路工程施工与质量验收规范》CJJ 1-2008 □《给水排水管工程施工及验收规范》GB 50268-2008</span>
+            <div class="basis-group">
+              <el-checkbox-group v-model="extra.test_basis" size="small">
+                <el-checkbox label="JTG 3450-2019">
+                  《公路路基路面现场测试规程》JTG 3450-2019
+                </el-checkbox>
+                <el-checkbox label="GB/T 50123-2019">
+                  《土工试验方法标准》GB/T 50123-2019
+                </el-checkbox>
+              </el-checkbox-group>
+              <el-checkbox-group v-model="extra.test_basis" size="small">
+                <el-checkbox label="CJJ 1-2008">
+                  《城镇道路工程施工与质量验收规范》CJJ 1-2008
+                </el-checkbox>
+                <el-checkbox label="GB 50268-2008">
+                  《给水排水管工程施工及验收规范》GB 50268-2008
+                </el-checkbox>
+              </el-checkbox-group>
+            </div>
           </el-form-item>
           <el-form-item label="备注">
             <el-input v-model="extra.remark_footer" />
@@ -203,7 +241,9 @@
             </el-col>
             <el-col :span="12">
               <el-form-item label="试验日期">
-                <el-date-picker v-model="extra.test_date" type="date" value-format="YYYY-MM-DD" placeholder="选择日期" style="width:100%" />
+                <el-date-picker v-model="extra.test_date_range" type="daterange" range-separator="至"
+                  start-placeholder="开始日期" end-placeholder="结束日期"
+                  value-format="YYYY-MM-DD" style="width:100%" />
               </el-form-item>
             </el-col>
           </el-row>
@@ -231,6 +271,23 @@
     <ReverseGenModal v-model="genModalVisible" :current-page-rows="currentPageRows"
       :all-rows="allRows" :extra="extra" :is-pipeline="isPipeline"
       :entrust-items="recordData.entrust?.items || []" @fill-and-save="onGenFillAndSave" />
+
+    <!-- 批量设置桩号弹窗 -->
+    <el-dialog v-model="stakeDialogVisible" title="批量设置桩号" width="480px" :close-on-click-modal="false">
+      <el-input ref="stakeInputRef" v-model="stakeDialogValue" placeholder="输入桩号，将应用到所有样品"
+        @keydown.enter="applyStakeToAll" @paste="handleStakePaste" />
+      <div class="corner-char-palette">
+        <span class="palette-label">上标：</span>
+        <button v-for="ch in superChars" :key="ch" class="char-btn" @click="insertCornerChar(ch)" type="button">{{ ch }}</button>
+        <span class="palette-divider">|</span>
+        <span class="palette-label">下标：</span>
+        <button v-for="ch in subChars" :key="ch" class="char-btn" @click="insertCornerChar(ch)" type="button">{{ ch }}</button>
+      </div>
+      <template #footer>
+        <el-button @click="stakeDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="applyStakeToAll">应用到所有桩号</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -254,6 +311,109 @@ const recordData = reactive({ entrust: null, pages: [] })
 const genModalVisible = ref(false)
 const titleClickCount = ref(0)
 let titleClickTimer = null
+
+// 批量设置桩号弹窗
+const stakeDialogVisible = ref(false)
+const stakeDialogValue = ref('')
+const stakeInputRef = ref(null)
+
+const superChars = ['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹', '⁺', '⁻']
+const subChars = ['₀', '₁', '₂', '₃', '₄', '₅', '₆', '₇', '₈', '₉', '₊', '₋']
+
+const SUPER_MAP = { '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹', '+': '⁺', '-': '⁻', '=': '⁼', '(': '⁽', ')': '⁾', 'n': 'ⁿ', 'i': 'ⁱ' }
+const SUB_MAP = { '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄', '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉', '+': '₊', '-': '₋', '=': '₌', '(': '₍', ')': '₎' }
+
+// 将 HTML 中的 <sup>/<sub> 标签转为 Unicode 角标字符（用于粘贴 Word 内容）
+function convertHtmlCorner(html) {
+  const div = document.createElement('div')
+  div.innerHTML = html
+  return walkCornerNode(div)
+}
+
+function walkCornerNode(node) {
+  if (node.nodeType === Node.TEXT_NODE) return node.textContent
+  if (node.nodeType === Node.ELEMENT_NODE) {
+    let result = ''
+    for (const child of node.childNodes) {
+      const text = walkCornerNode(child)
+      if (node.tagName === 'SUP') {
+        result += [...text].map(ch => SUPER_MAP[ch] || ch).join('')
+      } else if (node.tagName === 'SUB') {
+        result += [...text].map(ch => SUB_MAP[ch] || ch).join('')
+      } else {
+        result += text
+      }
+    }
+    return result
+  }
+  return ''
+}
+
+// 在输入框中粘贴时插入转换后的文本
+function pasteConverted(el, converted) {
+  if (!el) return
+  const start = el.selectionStart ?? el.value.length
+  const end = el.selectionEnd ?? start
+  const before = el.value.slice(0, start)
+  const after = el.value.slice(end)
+  el.value = before + converted + after
+  setTimeout(() => {
+    const pos = start + converted.length
+    el.setSelectionRange(pos, pos)
+    el.focus()
+  }, 0)
+  el.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
+function handleStakePaste(event) {
+  const html = event.clipboardData?.getData('text/html')
+  if (!html) return
+  event.preventDefault()
+  const converted = convertHtmlCorner(html)
+  pasteConverted(event.target, converted)
+}
+
+function handleCellPaste(event) {
+  const html = event.clipboardData?.getData('text/html')
+  if (!html) return
+  event.preventDefault()
+  const converted = convertHtmlCorner(html)
+  pasteConverted(event.target, converted)
+}
+
+function openStakeDialog() {
+  stakeDialogValue.value = ''
+  stakeDialogVisible.value = true
+}
+
+function insertCornerChar(ch) {
+  const el = stakeInputRef.value?.$el?.querySelector('input') || stakeInputRef.value?.input
+  if (!el) {
+    stakeDialogValue.value += ch
+    return
+  }
+  const start = el.selectionStart ?? stakeDialogValue.value.length
+  const end = el.selectionEnd ?? start
+  const before = stakeDialogValue.value.slice(0, start)
+  const after = stakeDialogValue.value.slice(end)
+  stakeDialogValue.value = before + ch + after
+  // 恢复光标位置
+  setTimeout(() => {
+    const pos = start + ch.length
+    el.setSelectionRange(pos, pos)
+    el.focus()
+  }, 0)
+}
+
+function applyStakeToAll() {
+  const value = stakeDialogValue.value
+  for (const row of allRows.value) {
+    if (!row.test_values) row.test_values = {}
+    row.test_values.stake_no = value
+  }
+  stakeDialogVisible.value = false
+  ElMessage.success(`已将桩号 "${value}" 应用到所有样品`)
+}
 
 // 仪器库（盒号→盒质量映射）
 const instrumentMap = ref({})  // { '1': 380, '2': 375, ... }
@@ -300,7 +460,11 @@ const header = reactive({
 })
 const extra = reactive({
   structure_layer: '', design_req: '', max_dry_densities: {},
-  conclusion: '', remark_footer: '', tester: '', reviewer: '', test_date: ''
+  conclusion: '', remark_footer: '', tester: '', reviewer: '', test_date: '',
+  sand_cylinder: '150mm',
+  drying_oven: [],
+  test_basis: [],
+  test_date_range: null
 })
 
 // 当前委托所有不重复材料
@@ -357,6 +521,42 @@ const allRows = ref([])
 // 是否管道压实度（桩号/取样位置每3列合并）
 const isPipeline = computed(() => {
   return recordData.entrust?.entrust_type === '管道压实度'
+})
+
+// 自动判定检测结论
+const autoConclusion = computed(() => {
+  const rows = allRows.value
+  if (!rows.length) return ''
+  const items = recordData.entrust?.items || []
+  const reqMap = {}
+  for (const item of items) {
+    const op = item.design_operator || '≥'
+    const req = parseFloat(item.design_requirement)
+    const tol = parseFloat(item.design_tolerance)
+    if (!isNaN(req)) reqMap[item.position_name] = { op, req, tol: isNaN(tol) ? 0 : tol }
+  }
+  let allPass = true
+  let hasAnyResult = false
+  for (const row of rows) {
+    const compaction = parseFloat(calcField(row, 'compaction'))
+    if (isNaN(compaction) || compaction <= 0) continue
+    hasAnyResult = true
+    const req = reqMap[row.position_name]
+    if (!req) continue
+    let pass
+    if (req.op === '±' && req.tol > 0) {
+      pass = compaction >= req.req - req.tol && compaction <= req.req + req.tol
+    } else if (req.op === '≥') {
+      pass = compaction >= req.req
+    } else if (req.op === '≤') {
+      pass = compaction <= req.req
+    } else {
+      pass = compaction >= req.req
+    }
+    if (!pass) allPass = false
+  }
+  if (!hasAnyResult) return ''
+  return allPass ? '符合要求' : '不符合要求'
 })
 
 // 输入行定义（顺序即表格行序）
@@ -437,7 +637,7 @@ onMounted(async () => {
   loading.value = true
   loadInstruments()  // 预加载仪器库（盒号自动填入用）
   try {
-    const res = await getRecords(route.params.entrustId)
+    const res = await getRecords(route.params.entrustNo)
     Object.assign(recordData, res.data)
 
     if (recordData.entrust) {
@@ -473,6 +673,20 @@ onMounted(async () => {
         }
         Object.assign(extra, firstPage.extra)
       }
+    }
+
+    // 为新字段设置默认值
+    if (!extra.sand_cylinder) extra.sand_cylinder = '150mm'
+    if (!extra.drying_oven) extra.drying_oven = []
+    if (!extra.test_basis || extra.test_basis.length === 0) {
+      extra.test_basis = isPipeline.value
+        ? ['JTG 3450-2019', 'GB 50268-2008']
+        : ['CJJ 1-2008', 'JTG 3450-2019']
+    }
+    if (!extra.test_date_range && extra.test_date) {
+      extra.test_date_range = extra.test_date.includes('~')
+        ? extra.test_date.split('~')
+        : [extra.test_date, extra.test_date]
     }
 
     // 确保所有材料都有密度槽位
@@ -783,6 +997,12 @@ async function handleInit() {
   extra.tester = ''
   extra.reviewer = ''
   extra.test_date = ''
+  extra.sand_cylinder = '150mm'
+  extra.drying_oven = []
+  extra.test_basis = isPipeline.value
+    ? ['JTG 3450-2019', 'GB 50268-2008']
+    : ['CJJ 1-2008', 'JTG 3450-2019']
+  extra.test_date_range = null
 
   // 重新生成抬头
   autoFillHeader()
@@ -801,7 +1021,7 @@ async function handleInit() {
 async function onGenFillAndSave() {
   // 倒推数据已填入所有行，立即保存
   try {
-    await updateRecordRows(route.params.entrustId, buildSavePayload())
+    await updateRecordRows(route.params.entrustNo, buildSavePayload())
     ElMessage.success('数据已自动保存')
   } catch (e) {
     ElMessage.warning('自动保存失败，请手动点击保存按钮')
@@ -879,7 +1099,11 @@ function buildSavePayload() {
           entrust_type: recordData.entrust?.entrust_type,
           entrust_date: header.entrust_date
         },
-        extra: { ...extra }
+        extra: {
+          ...extra,
+          test_date: extra.test_date_range && extra.test_date_range.length === 2
+            ? extra.test_date_range.join('~') : (extra.test_date || '')
+        }
       })
     }
   }
@@ -889,7 +1113,7 @@ function buildSavePayload() {
 async function handleSave() {
   saving.value = true
   try {
-    await updateRecordRows(route.params.entrustId, buildSavePayload())
+    await updateRecordRows(route.params.entrustNo, buildSavePayload())
     ElMessage.success('保存成功')
   } finally { saving.value = false }
 }
@@ -908,19 +1132,19 @@ async function handlePrintPdf() {
 
   try {
     // Step 1: 保存数据
-    await updateRecordRows(route.params.entrustId, buildSavePayload())
+    await updateRecordRows(route.params.entrustNo, buildSavePayload())
     printPercent.value = 10
     printMessage.value = '数据已保存，正在启动 PDF 生成...'
     await delay(300)
 
     // Step 2: 启动打印任务
-    const res = await startPrint(route.params.entrustId)
+    const res = await startPrint(route.params.entrustNo)
     printTaskId = res.data.taskId
 
     // Step 3: 轮询进度
     printPollTimer = setInterval(async () => {
       try {
-        const statusRes = await getPrintStatus(route.params.entrustId, printTaskId)
+        const statusRes = await getPrintStatus(route.params.entrustNo, printTaskId)
         const job = statusRes.data
         printStep.value = job.step
         printTotal.value = job.totalSteps
@@ -969,13 +1193,13 @@ async function handlePrintBlank() {
 
   try {
     // 启动空白打印任务
-    const res = await startPrintBlank(route.params.entrustId)
+    const res = await startPrintBlank(route.params.entrustNo)
     printTaskId = res.data.taskId
 
     // 轮询进度
     printPollTimer = setInterval(async () => {
       try {
-        const statusRes = await getPrintBlankStatus(route.params.entrustId, printTaskId)
+        const statusRes = await getPrintBlankStatus(route.params.entrustNo, printTaskId)
         const job = statusRes.data
         printStep.value = job.step
         printTotal.value = job.totalSteps
@@ -1014,7 +1238,7 @@ async function handleDownloadPdf() {
   if (!printTaskId) return
   try {
     const downloadFn = printMode.value === 'blank' ? downloadPrintBlankPdf : downloadPrintPdf
-    const blob = await downloadFn(route.params.entrustId, printTaskId)
+    const blob = await downloadFn(route.params.entrustNo, printTaskId)
     const url = window.URL.createObjectURL(
       new Blob([blob], { type: 'application/pdf' })
     )
@@ -1146,4 +1370,72 @@ onBeforeUnmount(() => {
 .merged-cell .ci { min-width: 220px; }
 
 .static-text { color: var(--color-text-secondary); font-size: 12px; }
+
+/* 检测设备行 */
+.equipment-line {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.inline-checkbox-group {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.inline-checkbox-group :deep(.el-checkbox) {
+  margin-right: 0;
+}
+
+/* 检测依据 */
+.basis-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* 桩号角标面板 */
+.corner-char-palette {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.palette-label {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  margin-right: 2px;
+}
+
+.palette-divider {
+  color: var(--color-border);
+  margin: 0 4px;
+  font-size: 11px;
+}
+
+.char-btn {
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: all 0.15s;
+}
+
+.char-btn:hover {
+  border-color: var(--color-primary);
+  background: #e8f0fe;
+  color: var(--color-primary);
+}
 </style>
