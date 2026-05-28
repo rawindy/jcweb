@@ -1,0 +1,187 @@
+﻿页面,区块,前端变量名,前端显示名,API路径,HTTP方法,请求参数路径,数据库表,数据库字段,字段类型,说明/注释
+=== 登录 /login ===,,,,,,,,,,
+登录,登录表单,username,用户名,/api/auth/login,POST,body.username,sys_user,username,TEXT,用户登录名
+登录,登录表单,password,密码,/api/auth/login,POST,body.password,sys_user,password,TEXT,bcrypt加密存储
+登录,登录表单,token,令牌,/api/auth/login,POST,response.data.token,-,-,TEXT,JWT token 存入localStorage
+登录,用户信息,real_name,真实姓名,/api/auth/login,POST,response.data.user.real_name,sys_user,real_name,TEXT,用于顶部栏显示
+=== 主布局 ==,,,,,,,,,,
+主布局,顶部栏,real_name,当前用户,-,GET,-,sys_user,real_name,TEXT,Pinia userStore读取
+=== 工程项目登记 /project ===,,,,,,,,,,
+工程项目登记,列表查询,page,页码,/api/projects,GET,query.page,-,-,INTEGER,分页参数
+工程项目登记,列表查询,pageSize,每页条数,/api/projects,GET,query.pageSize,-,-,INTEGER,分页参数
+工程项目登记,列表查询,field,搜索字段,/api/projects,GET,query.field,-,-,TEXT,如project_name
+工程项目登记,列表查询,keyword,搜索关键字,/api/projects,GET,query.keyword,-,-,TEXT,模糊搜索
+"工程项目登记,新增/编辑弹窗,project_name,工程名称,/api/projects,POST/PUT,body.project_name,biz_project,project_name,TEXT,NOT NULL",,,,,,,,,,
+"工程项目登记,新增/编辑弹窗,client_unit,委托单位,/api/projects,POST/PUT,body.client_unit,biz_project,client_unit,TEXT,",,,,,,,,,,
+"工程项目登记,新增/编辑弹窗,client_person,委托人,/api/projects,POST/PUT,body.client_person,biz_project,client_person,TEXT,",,,,,,,,,,
+"工程项目登记,新增/编辑弹窗,supervision_unit,监理/见证单位,/api/projects,POST/PUT,body.supervision_unit,biz_project,supervision_unit,TEXT,",,,,,,,,,,
+"工程项目登记,新增/编辑弹窗,witness_person,见证人,/api/projects,POST/PUT,body.witness_person,biz_project,witness_person,TEXT,",,,,,,,,,,
+"工程项目登记,新增/编辑弹窗,construction_unit,施工单位,/api/projects,POST/PUT,body.construction_unit,biz_project,construction_unit,TEXT,",,,,,,,,,,
+"工程项目登记,新增/编辑弹窗,build_unit,建设单位,/api/projects,POST/PUT,body.build_unit,biz_project,build_unit,TEXT,",,,,,,,,,,
+"工程项目登记,新增/编辑弹窗,remark,备注,/api/projects,POST/PUT,body.remark,biz_project,remark,TEXT,",,,,,,,,,,
+工程项目登记,删除,id,项目ID,/api/projects/:id,DELETE,path.id,biz_project,status,INTEGER,软删除 status=0
+工程项目登记,项目搜索,projectNo,工程编号,/api/projects/:projectNo,GET,path.projectNo,biz_project,project_no,TEXT,委托录入时关联工程
+工程项目登记,项目搜索,keyword,搜索关键字,/api/projects/search,GET,query.keyword,biz_project,project_name,TEXT,远程搜索下拉
+=== 委托录入 /entrust ===,,,,,,,,,,
+"委托列表,列表查询,category_code,检测类别,/api/entrusts,GET,query.category_code,biz_entrust,category_code,TEXT,筛选条件(SYS/STJ/SWC)",,,,,,,,,,
+"委托列表,列表查询,page/pagesize,分页,/api/entrusts,GET,query,-,-,-,",,,,,,,,,,
+委托列表,删除,id,委托ID,/api/entrusts/:id,DELETE,path.id,-,-,-,级联删除子表和记录
+=== 委托录入/新增 /entrust/create ===,,,,,,,,,,
+委托新增,步骤1,category_code,检测类别,/api/entrusts,POST,body.category_code,biz_entrust,category_code,TEXT,SYS=压实度/STJ=击实/SWC=弯沉
+委托新增,步骤2,project_id,关联工程,/api/entrusts,POST,body.project_id,biz_entrust,project_id,INTEGER,引用biz_project.id
+委托新增,步骤2,entrust_date,委托日期,/api/entrusts,POST,body.entrust_date,biz_entrust,entrust_date,TEXT,格式YYYY-MM-DD
+委托新增,步骤3,entrust_type,压实度类型,/api/entrusts,POST,body.entrust_type,biz_entrust,entrust_type,TEXT,管道压实度/路基压实度
+委托新增,步骤3,remark,备注,/api/entrusts,POST,body.remark,biz_entrust,remark,TEXT,
+委托新增,步骤3→压实度,position_name,部位名称,/api/entrusts,POST,body.items[].position_name,biz_compaction_item,position_name,TEXT,管底/胸腔/管顶/车道
+委托新增,步骤3→压实度,group_count,组数,/api/entrusts,POST,body.items[].group_count,biz_compaction_item,group_count,INTEGER,每组3层
+委托新增,步骤3→压实度,material,材料,/api/entrusts,POST,body.items[].material,biz_compaction_item,material,TEXT,砂/石屑/碎石/土/塘渣
+委托新增,步骤3→压实度,design_requirement,设计要求值,/api/entrusts,POST,body.items[].design_requirement,biz_compaction_item,design_requirement,REAL,默认90(%)
+委托新增,步骤3→压实度,design_operator,设计要求运算符,/api/entrusts,POST,body.items[].design_operator,biz_compaction_item,design_operator,VARCHAR(5),≥/≤/=/± 默认≥
+委托新增,步骤3→压实度,design_tolerance,设计要求公差,/api/entrusts,POST,body.items[].design_tolerance,biz_compaction_item,design_tolerance,DECIMAL,仅±时使用
+委托新增,步骤3→压实度,sort,排序,/api/entrusts,POST,body.items[].sort,biz_compaction_item,sort,INTEGER,
+委托新增,步骤3→击实,material,材料,/api/entrusts,POST,body.items[].material,biz_proctor_item,material,TEXT,
+委托新增,步骤3→击实,test_method,击实方法,/api/entrusts,POST,body.items[].test_method,biz_proctor_item,test_method,TEXT,轻型/重型
+委托新增,步骤3→弯沉,position_name,部位名称,/api/entrusts,POST,body.items[].position_name,biz_deflection_item,position_name,TEXT,默认车道
+委托新增,步骤3→弯沉,design_requirement,设计要求,/api/entrusts,POST,body.items[].design_requirement,biz_deflection_item,design_requirement,REAL,
+=== 委托详情/编辑 /entrust/:id ===,,,,,,,,,,
+委托详情,查询,id,委托ID,/api/entrusts/:id,GET,path.id,-,-,-,
+委托详情,编辑保存,entrust_no,委托编号,/api/entrusts/:id,PUT,body.entrust_no,biz_entrust,entrust_no,TEXT,
+委托详情,编辑保存,project_id,关联工程,/api/entrusts/:id,PUT,body.project_id,biz_entrust,project_id,INTEGER,
+委托详情,编辑保存,entrust_date,委托日期,/api/entrusts/:id,PUT,body.entrust_date,biz_entrust,entrust_date,TEXT,
+委托详情,编辑保存,remark,备注,/api/entrusts/:id,PUT,body.remark,biz_entrust,remark,TEXT,
+委托详情,编辑保存,items,委托明细,/api/entrusts/:id,PUT,body.items[],biz_compaction_item,全部字段,-,先删后插(事务)
+=== 仪器库管理 /instruments ===,,,,,,,,,,
+仪器库管理,列表查询,category,仪器类别,/api/instruments,GET,query.category,sys_instrument,category,TEXT,白搪瓷盒等
+仪器库管理,新增,code,编号,/api/instruments,POST,body.code,sys_instrument,code,TEXT,与category联合唯一
+仪器库管理,新增,mass,质量(g),/api/instruments,POST,body.mass,sys_instrument,mass,REAL,
+仪器库管理,新增,category,类别,/api/instruments,POST,body.category,sys_instrument,category,TEXT,
+仪器库管理,编辑保存,code,编号,/api/instruments/:id,PUT,body.code,sys_instrument,code,TEXT,
+仪器库管理,编辑保存,mass,质量,/api/instruments/:id,PUT,body.mass,sys_instrument,mass,REAL,
+仪器库管理,删除,id,仪器ID,/api/instruments/:id,DELETE,path.id,sys_instrument,-,-,物理删除
+仪器库管理,精确查找,category,类别,/api/instruments/lookup/:category/:code,GET,path.category,sys_instrument,category,TEXT,按类别+编号精确查找
+仪器库管理,精确查找,code,编号,/api/instruments/lookup/:category/:code,GET,path.code,sys_instrument,code,TEXT,
+=== 原始记录录入 /record/:entrustNo ===,,,,,,,,,,
+原始记录录入,页面加载,entrustNo,委托编号,/api/records/:entrustNo,GET,path.entrustNo,biz_entrust,entrust_no,TEXT,获取完整记录数据
+原始记录录入,抬头信息,project_name,工程名称,-,PUT,body.header_data.project_name,-,-,TEXT,展示用从biz_project读取
+原始记录录入,抬头信息,client_unit,委托单位,-,PUT,body.header_data.client_unit,-,-,TEXT,
+原始记录录入,抬头信息,supervision_unit,见证单位,-,PUT,body.header_data.supervision_unit,-,-,TEXT,
+原始记录录入,抬头信息,entrust_no,委托编号,-,PUT,body.header_data.entrust_no,-,-,TEXT,
+原始记录录入,抬头信息,entrust_date,委托日期,-,PUT,body.header_data.entrust_date,-,-,TEXT,
+原始记录录入,抬头信息,entrust_type,委托类型,-,PUT,body.header_data.entrust_type,-,-,TEXT,
+原始记录录入,抬头信息,structure_layer,结构层次/材料,PUT /records/:entrustNo/rows,PUT,body[].extra.structure_layer,biz_original_record,remark→structure_layer,JSON→TEXT,"自动生成格式如""管道回填砂"""
+原始记录录入,抬头信息,design_req,设计要求,PUT /records/:entrustNo/rows,PUT,body[].extra.design_req,biz_original_record,remark→design_req,JSON→TEXT,"从委托明细拼装如""管底≥95%"""
+原始记录录入,抬头信息,max_dry_densities,最大干密度,PUT /records/:entrustNo/rows,PUT,body[].extra.max_dry_densities,biz_original_record,remark→max_dry_densities,JSON→Object,"按材料:{砂:""2.11""}"
+原始记录录入,抬头信息,test_date,检测日期,PUT /records/:entrustNo/rows,PUT,body[].extra.test_date,biz_original_record,remark→test_date,JSON→TEXT,
+原始记录录入,抬头信息,test_basis,检测依据,PUT /records/:entrustNo/rows,PUT,body[].extra.test_basis,biz_original_record,remark→test_basis,JSON→Array,checkbox多选
+原始记录录入,抬头信息,sand_cylinder,灌砂筒规格,PUT /records/:entrustNo/rows,PUT,body[].extra.sand_cylinder,biz_original_record,remark→sand_cylinder,JSON→TEXT,"如""150mm"""
+原始记录录入,抬头信息,drying_oven,烘箱编号,PUT /records/:entrustNo/rows,PUT,body[].extra.drying_oven,biz_original_record,remark→drying_oven,JSON→Array,checkbox多选
+原始记录录入,抬头信息,conclusion,试验结论,PUT /records/:entrustNo/rows,PUT,body[].extra.conclusion,biz_original_record,remark→conclusion,JSON→TEXT,
+原始记录录入,抬头信息,remark_footer,脚注,/api/records/:entrustNo/rows,PUT,body[].extra.remark_footer,biz_original_record,remark→remark_footer,JSON→TEXT,
+原始记录录入,抬头信息,tester,试验人,/api/records/:entrustNo/rows,PUT,body[].extra.tester,biz_original_record,remark→tester,JSON→TEXT,
+原始记录录入,抬头信息,reviewer,复核人,/api/records/:entrustNo/rows,PUT,body[].extra.reviewer,biz_original_record,remark→reviewer,JSON→TEXT,
+=== 原始记录录入/数据表格 ===,,,,,,,,,,
+数据表格,每行,page_no,页码,/api/records/:entrustNo/rows,PUT,body[].page_no,biz_original_record,page_no,INTEGER,
+数据表格,每行,total_pages,总页数,/api/records/:entrustNo/rows,PUT,body[].total_pages,biz_original_record,total_pages,INTEGER,
+数据表格,每行,template_type,模板类型,/api/records/:entrustNo/rows,PUT,body[].template_type,biz_original_record,template_type,TEXT,pipe_compaction/roadbed_soil等
+数据表格,每行,sample_no,样品编号,/api/records/:entrustNo/rows,PUT,body[].rows[].sample_no,biz_original_record_item,sample_no,TEXT,格式{委托编号}-{流水}
+数据表格,每行,position_name,取样部位,/api/records/:entrustNo/rows,PUT,body[].rows[].position_name,biz_original_record_item,position_name,TEXT,来自委托明细
+数据表格,每行,layer,层位,/api/records/:entrustNo/rows,PUT,body[].rows[].layer,biz_original_record_item,layer,TEXT,第一层/第二层/第三层
+数据表格,每行,material,材料,/api/records/:entrustNo/rows,PUT,body[].rows[].material,biz_original_record_item,test_values→material,JSON→TEXT,从委托明细注入
+数据表格,每行,stake_no,取样桩号,/api/records/:entrustNo/rows,PUT,body[].rows[].test_values.stake_no,biz_original_record_item,test_values→stake_no,JSON→TEXT,用户填写如K0+100
+数据表格,每行,position,取样位置,/api/records/:entrustNo/rows,PUT,body[].rows[].test_values.position,biz_original_record_item,test_values→position,JSON→TEXT,"自动填充如""K0+100左侧"""
+数据表格,每行,sand_before,灌砂前(砂+筒质量),/api/records/:entrustNo/rows,PUT,body[].rows[].test_values.sand_before,biz_original_record_item,test_values→sand_before,JSON→NUMBER,单位g 用户填写
+数据表格,每行,sand_after,灌砂后(砂+筒质量),/api/records/:entrustNo/rows,PUT,body[].rows[].test_values.sand_after,biz_original_record_item,test_values→sand_after,JSON→NUMBER,单位g 用户填写
+数据表格,每行,sand_surface,表面砂质量,/api/records/:entrustNo/rows,PUT,body[].rows[].test_values.sand_surface,biz_original_record_item,test_values→sand_surface,JSON→NUMBER,单位g 用户填写
+数据表格,每行,pit_sand,试坑灌入量砂,PUT /records/:entrustNo/rows,PUT,body[].rows[].test_values.pit_sand,biz_original_record_item,test_values→pit_sand,JSON→NUMBER,自动计算:sand_before-sand_after-sand_surface
+数据表格,每行,sand_density,量砂堆积密度,/api/records/:entrustNo/rows,PUT,body[].rows[].test_values.sand_density,biz_original_record_item,test_values→sand_density,JSON→NUMBER,单位g/cm³ 用户填写
+数据表格,每行,pit_volume,试坑体积,/api/records/:entrustNo/rows,PUT,body[].rows[].test_values.pit_volume,biz_original_record_item,test_values→pit_volume,JSON→NUMBER,自动计算:pit_sand/sand_density
+数据表格,每行,wet_mass,湿料质量,/api/records/:entrustNo/rows,PUT,body[].rows[].test_values.wet_mass,biz_original_record_item,test_values→wet_mass,JSON→NUMBER,单位g 用户填写
+数据表格,每行,wet_density,湿密度,PUT /records/:entrustNo/rows,PUT,body[].rows[].test_values.wet_density,biz_original_record_item,test_values→wet_density,JSON→NUMBER,自动计算:wet_mass/pit_volume(2位小数)
+数据表格,每行,box_no,盒号,/api/records/:entrustNo/rows,PUT,body[].rows[].test_values.box_no,biz_original_record_item,test_values→box_no,JSON→TEXT,用户填写
+数据表格,每行,box_mass,盒质量,/api/records/:entrustNo/rows,PUT,body[].rows[].test_values.box_mass,biz_original_record_item,test_values→box_mass,JSON→NUMBER,单位g 自动从仪器库填入
+数据表格,每行,box_wet,(盒+湿料)质量,/api/records/:entrustNo/rows,PUT,body[].rows[].test_values.box_wet,biz_original_record_item,test_values→box_wet,JSON→NUMBER,单位g 用户填写
+数据表格,每行,box_dry,(盒+干料)质量,/api/records/:entrustNo/rows,PUT,body[].rows[].test_values.box_dry,biz_original_record_item,test_values→box_dry,JSON→NUMBER,单位g 用户填写
+数据表格,每行,water_content,含水率,PUT /records/:entrustNo/rows,PUT,body[].rows[].test_values.water_content,biz_original_record_item,test_values→water_content,JSON→NUMBER,自动计算:(box_wet-box_dry)/(box_dry-box_mass)*100
+数据表格,每行,dry_density,干密度,PUT /records/:entrustNo/rows,PUT,body[].rows[].test_values.dry_density,biz_original_record_item,test_values→dry_density,JSON→NUMBER,自动计算:wet_density/(1+water_content/100)(2位小数)
+数据表格,每行,compaction,压实度,PUT /records/:entrustNo/rows,PUT,body[].rows[].test_values.compaction,biz_original_record_item,test_values→compaction,JSON→NUMBER,自动计算:dry_density/max_dry_density*100(1位小数)
+数据表格,每行,max_dry_density,最大干密度,PUT /records/:entrustNo/rows,PUT,body[].rows[].test_values.max_dry_density,biz_original_record_item,test_values→max_dry_density,JSON→NUMBER,从extra.max_dry_densities取对应材料值
+=== 原始记录录入/打印 ===,,,,,,,,,,
+原始记录打印,启动打印,-,生成PDF,/api/records/:entrustNo/print/start,POST,-,-,-,-,先保存数据再异步生成
+原始记录打印,轮询进度,taskId,任务ID,/api/records/:entrustNo/print/status/:taskId,GET,path.taskId,-,-,-,轮询直到job.done=true
+原始记录打印,下载PDF,taskId,任务ID,/api/records/:entrustNo/print/download/:taskId,GET,path.taskId,-,-,BLOB,responseType:blob
+原始记录打印,空白记录单,-,空白PDF,/api/records/:entrustNo/print/blank/start,POST,-,-,-,-,同上三步骤用blank/start/status/download
+=== 检测报告 /print ===,,,,,,,,,,
+检测报告,选择委托,category_code,检测类别,/api/entrusts,GET,query.category_code,-,-,-,过滤压实度委托
+检测报告,加载数据,entrustId,委托ID,/api/reports/:id/data,GET,path.id,-,-,-,获取报告全部数据
+=== 检测报告/封面页 ===,,,,,,,,,,
+报告封面页,显示字段,report_no,报告编号,/api/reports/:id/save,POST,body.report_no,biz_entrust,entrust_no,TEXT,只读显示
+报告封面页,显示字段,project_name,工程名称,/api/reports/:id/save,POST,body.project_name,biz_project,project_name,TEXT,可编辑
+报告封面页,显示字段,client_unit,委托单位,/api/reports/:id/save,POST,body.client_unit,biz_project,client_unit,TEXT,可编辑
+报告封面页,显示字段,test_item,检测项目,/api/reports/:id/save,POST,body.test_item,-,-,TEXT,"显示名如""管道压实度（灌砂法）"""
+报告封面页,显示字段,report_date,报告日期,/api/reports/:id/save,POST,body.report_date,biz_entrust,report_date,TEXT,可编辑
+=== 检测报告/信息页 ===,,,,,,,,,,
+报告信息页,工程信息,entrust_type,检测类别,/api/reports/:id/save,POST,body.entrust_type,biz_entrust,entrust_type,TEXT,管道压实度/路基压实度
+报告信息页,工程信息,build_unit,建设单位,/api/reports/:id/save,POST,body.build_unit,biz_project,build_unit,TEXT,可编辑
+报告信息页,工程信息,construction_unit,施工单位,/api/reports/:id/save,POST,body.construction_unit,biz_project,construction_unit,TEXT,可编辑
+报告信息页,工程信息,supervision_unit,见证单位,/api/reports/:id/save,POST,body.supervision_unit,biz_project,supervision_unit,TEXT,可编辑
+报告信息页,工程信息,witness_person,见证人,/api/reports/:id/save,POST,body.witness_person,biz_project,witness_person,TEXT,可编辑
+报告信息页,工程信息,total_samples,样本数量,/api/reports/:id/save,POST,body.total_samples,-,-,NUMBER,自动计算group_count×3
+报告信息页,工程信息,sampling_date,取样日期,/api/reports/:id/save,POST,body.sampling_date,biz_entrust,sampling_date,TEXT,可编辑
+报告信息页,工程信息,test_date,检测日期,/api/reports/:id/save,POST,body.test_date,biz_original_record,remark→test_date,JSON→TEXT,可编辑
+报告信息页,工程信息,section_pile,路段桩号,/api/reports/:id/save,POST,body.section_pile,biz_entrust,section_pile,TEXT,可编辑
+报告信息页,工程信息,structure_part,结构部位,/api/reports/:id/save,POST,body.structure_part,biz_original_record,remark→structure_layer,JSON→TEXT,从结构层次自动填
+报告信息页,检测配置,test_basis,检测依据,/api/reports/:id/save,POST,body.test_basis,biz_original_record,remark→test_basis,JSON→Array,checkbox多选存数组
+报告信息页,检测配置,sand_cylinder,灌砂筒,/api/reports/:id/save,POST,body.test_equipment.sand_cylinder,biz_original_record,remark→sand_cylinder,JSON→TEXT,
+报告信息页,检测配置,drying_oven,烘箱,/api/reports/:id/save,POST,body.test_equipment.drying_oven,biz_original_record,remark→drying_oven,JSON→Array,
+报告信息页,检测配置,max_dry_density,最大干密度,/api/reports/:id/save,POST,body.max_dry_density,biz_original_record,remark→max_dry_densities,JSON→Object,"格式如""砂：2.11 g/cm³"""
+报告信息页,检测结论,conclusion,检测结论,/api/reports/:id/save,POST,body.conclusion,biz_original_record,remark→report_conclusion,JSON→TEXT,可编辑/有默认文本
+报告信息页,检测结论,tester,试验人,-,-,-,-,-,-,从extra读取写入页底
+报告信息页,检测结论,reviewer,复核人,-,-,-,-,-,-,从extra读取写入页底
+报告信息页,检测结论,remark_footer,页底备注,-,-,-,-,-,-,从extra读取写入页底
+=== 检测报告/数据页 (管道详情) ===,,,,,,,,,,
+报告数据页,表格列1,seq,序号,-,-,-,-,-,-,组内序号1/2/3
+报告数据页,表格列2,sample_no,试样编号,-,GET,response.data.data_rows[].sample_no,biz_original_record_item,sample_no,TEXT,每层独立编号
+报告数据页,表格列3(vMerge3行),stake_no,取样桩号,-,GET,response.data.data_rows[].stake_no,biz_original_record_item,test_values→stake_no,JSON→TEXT,同测点3层共享
+报告数据页,表格列3(vMerge3行),position,取样位置(原始),-,-,-,biz_original_record_item,test_values→position,JSON→TEXT,"如""K0+100左侧""→拆分为桩号+侧位"
+报告数据页,表格列4(vMerge3行/段1),position_name,桩号部分,-,GET,response.data.data_rows[].position_name,-,-,TEXT,从position解析(去侧位后缀)
+报告数据页,表格列4(vMerge3行/段2),position_side,侧位部分,-,GET,response.data.data_rows[].position_side,-,-,TEXT,左侧/右侧/底侧/上侧
+报告数据页,表格列5,layer,层位,-,GET,response.data.data_rows[].layer,biz_original_record_item,layer,TEXT,第一层/第二层/第三层
+报告数据页,表格列6,design_requirement,设计要求,-,GET,response.data.data_rows[].design_requirement,biz_compaction_item,design_requirement+design_operator,REAL+VARCHAR,"拼装显示如""≥90%"""
+报告数据页,表格列7,dry_density,干密度,-,GET,response.data.data_rows[].dry_density,biz_original_record_item,test_values→dry_density,JSON→NUMBER,从记录单直接读取(不重算)
+报告数据页,表格列8,compaction,压实度,-,GET,response.data.data_rows[].compaction,biz_original_record_item,test_values→compaction,JSON→NUMBER,从记录单直接读取(不重算)
+报告数据页,表格列9,judgment,单项判定,-,GET,response.data.data_rows[].judgment,-,-,TEXT,compaction>=designReqNum?符合:不符合
+报告数据页,页底附注,design_req,设计要求,GET /reports/:id/data,GET,body.max_dry_density,biz_original_record,remark→design_req,JSON→TEXT,"显示如""设计要求 ≥90%"""
+报告数据页,页底附注,maxDryDisplay,最大干密度,-,GET,response.data.info.max_dry_density,biz_original_record,remark→max_dry_densities,JSON→String,"显示如""最大干密度：砂：2.11 g/cm³"""
+=== 检测报告/打印 ===,,,,,,,,,,
+报告打印,启动打印,headerData,报告抬头数据,/api/reports/:id/print/start,POST,body,-,-,Object,保存的报告字段+覆盖值
+报告打印,轮询进度,taskId,任务ID,/api/reports/:id/print/status/:taskId,GET,path.taskId,-,-,-,
+报告打印,下载PDF,taskId,任务ID,/api/reports/:id/print/download/:taskId,GET,path.taskId,-,-,BLOB,
+报告打印,保存抬头,data,报告抬头数据,/api/reports/:id/save,POST,body,-,-,-,保存前先调用
+=== 系统表(登录/权限/字典) ===,,,,,,,,,,
+系统管理,用户表,username,用户名,-,-,-,sys_user,username,TEXT,唯一
+系统管理,用户表,password,密码,-,-,-,sys_user,password,TEXT,bcrypt
+系统管理,用户表,real_name,真实姓名,-,-,-,sys_user,real_name,TEXT,
+系统管理,用户表,dept_id,部门ID,-,-,-,sys_user,dept_id,INTEGER,引用sys_dept.id
+系统管理,用户表,phone,手机号,-,-,-,sys_user,phone,TEXT,
+系统管理,用户表,email,邮箱,-,-,-,sys_user,email,TEXT,
+系统管理,用户表,status,状态,-,-,-,sys_user,status,INTEGER,1=启用/0=禁用
+系统管理,角色表,role_name,角色名,-,-,-,sys_role,role_name,TEXT,
+系统管理,角色表,role_code,角色编码,-,-,-,sys_role,role_code,TEXT,super_admin/tester/reviewer
+系统管理,部门表,dept_name,部门名称,-,-,-,sys_dept,dept_name,TEXT,
+系统管理,部门表,leader,负责人,-,-,-,sys_dept,leader,TEXT,
+系统管理,字典类型,dict_name,字典名,-,-,-,sys_dict_type,dict_name,TEXT,
+系统管理,字典类型,dict_type,字典编码,-,-,-,sys_dict_type,dict_type,TEXT,如compaction_material
+系统管理,字典数据,dict_label,字典标签,-,-,-,sys_dict_data,dict_label,TEXT,
+系统管理,字典数据,dict_value,字典值,-,-,-,sys_dict_data,dict_value,TEXT,
+系统管理,菜单表,menu_name,菜单名,-,-,-,sys_menu,menu_name,TEXT,
+系统管理,菜单表,permission,权限标识,-,-,-,sys_menu,permission,TEXT,如system:user
+=== 存储规则说明 ===,,,,,,,,,,
+说明,-,-,-,-,-,-,-,-,"biz_original_record.remark是JSON列，存储extra对象(structure_layer,design_req,max_dry_densities,...)",
+说明,-,-,-,-,-,-,-,-,biz_original_record.header_data是JSON列，存储抬头快照(只读),
+说明,-,-,-,-,-,-,-,-,biz_original_record_item.test_values是JSON列，存储所有检测原始数据和计算结果,
+说明,-,-,-,-,-,-,-,-,删除委托时级联删除:record_items→records→compaction_item→proctor_item→deflection_item→entrust,
+说明,-,-,-,-,-,-,-,-,项目删除为软删除(status=0);委托和仪器为物理删除,
+说明,-,-,-,-,-,-,-,-,"自动计算字段(前端+后端双算):pit_sand,pit_volume,wet_density,water_content,dry_density,compaction",
+说明,-,-,-,-,-,-,-,-,数值修约:四舍六入五成双(bankersRound),
+说明,-,-,-,-,-,-,-,-,检测报告数据页:ROWS_PER_PAGE=18行(6测点×3层),
+说明,-,-,-,-,-,-,-,-,"原始记录单:每页9行,组内第1行vMerge合并桩号和位置",

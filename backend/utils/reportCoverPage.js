@@ -20,7 +20,6 @@ function escapeRegex(s) {
  */
 function replaceCoverValue(xml, label, value) {
   const escLabel = escapeRegex(label);
-  // 匹配标签所在的 w:t 及其所在 w:r 的结束标签
   const regex = new RegExp(
     `(<w:t[^>]*>)${escLabel}(</w:t>)\\s*</w:r>`,
     's'
@@ -29,14 +28,31 @@ function replaceCoverValue(xml, label, value) {
   if (!match) return xml;
 
   const afterLabelRun = match.index + match[0].length;
-  // 找到所在段落的结束位置
   const paraEnd = xml.indexOf('</w:p>', afterLabelRun);
   if (paraEnd === -1) return xml;
 
-  const escVal = escXml(value);
-  const newRun = `<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="宋体"/><w:sz w:val="30"/><w:szCs w:val="30"/><w:b/></w:rPr><w:t xml:space="preserve">${escVal}</w:t></w:r>`;
+  // 找到段落起始位置及 pPr
+  const paraStart = xml.lastIndexOf('<w:p', match.index);
+  const pPrStart = xml.indexOf('<w:pPr', paraStart);
+  const pPrEnd = xml.indexOf('</w:pPr>', pPrStart) + '</w:pPr>'.length;
+  let pPr = xml.substring(pPrStart, pPrEnd);
 
-  return xml.substring(0, afterLabelRun) + newRun + xml.substring(paraEnd);
+  // 移除悬挂缩进，改用 tab 止点精确对齐换行
+  pPr = pPr.replace(/\s*w:hangingChars="[^"]*"/g, '');
+  pPr = pPr.replace(/\s*w:hanging="[^"]*"/g, '');
+
+  // 添加 tab 止点（与 w:left 同位置，确保换行后文本与 tab 后的值对齐）
+  if (!pPr.includes('<w:tabs>')) {
+    pPr = pPr.replace('</w:pPr>', '<w:tabs><w:tab w:val="left" w:pos="3186"/></w:tabs></w:pPr>');
+  }
+
+  const escVal = escXml(value);
+  // 标签后插入 tab 再跟值，tab 会跳到 3186 twips 处，换行后的行也以 w:left="3186" 对齐
+  const tabAndValue = `<w:tab/><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="宋体"/><w:sz w:val="30"/><w:szCs w:val="30"/><w:b/></w:rPr><w:t xml:space="preserve">${escVal}</w:t></w:r>`;
+
+  return xml.substring(0, pPrStart) + pPr +
+         xml.substring(pPrEnd, afterLabelRun) + tabAndValue +
+         xml.substring(paraEnd);
 }
 
 /**

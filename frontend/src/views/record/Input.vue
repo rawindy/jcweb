@@ -22,7 +22,7 @@
         </el-button>
         <el-button type="success" @click="handlePrintPdf" :disabled="printing">
           <el-icon style="margin-right:4px"><Printer /></el-icon>
-          打印记录单(PDF)
+          打印手写记录单预览
         </el-button>
         <el-button type="success" @click="handlePrintBlank" :disabled="printing" plain>
           <el-icon style="margin-right:4px"><Printer /></el-icon>
@@ -185,9 +185,12 @@
         <el-form label-width="80px" size="small">
           <el-form-item label="检测结论">
             <div style="display:flex;align-items:center;gap:8px">
-              <el-input v-model="extra.conclusion" :placeholder="autoConclusion" style="flex:1" />
+              <el-select v-model="extra.conclusion" style="width:240px" clearable placeholder="请选择">
+                <el-option label="符合要求" value="符合要求" />
+                <el-option label="不符合要求" value="不符合要求" />
+              </el-select>
               <el-tag v-if="autoConclusion" :type="autoConclusion === '符合要求' ? 'success' : 'danger'" effect="dark">
-                {{ autoConclusion }}
+                建议：{{ autoConclusion }}
               </el-tag>
             </div>
           </el-form-item>
@@ -292,7 +295,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getRecords, updateRecordRows, startPrint, getPrintStatus, downloadPrintPdf, startPrintBlank, getPrintBlankStatus, downloadPrintBlankPdf } from '../../api/record'
@@ -714,6 +717,9 @@ onMounted(async () => {
     }
 
     if (rows.length > 0) activePage.value = 1
+
+    // 初始加载完成后启用自动保存
+    nextTick(() => { autoSaveReady = true })
   } finally {
     loading.value = false
   }
@@ -1015,6 +1021,9 @@ async function handleInit() {
   // 管道压实度：自动填充取样位置
   autoFillPosition()
 
+  // 重置结论选择标记，允许自动判定
+  userPickedConclusion = false
+
   ElMessage.success('已初始化，抬头信息已重新生成')
 }
 
@@ -1117,6 +1126,53 @@ async function handleSave() {
     ElMessage.success('保存成功')
   } finally { saving.value = false }
 }
+
+// ===== 自动保存 =====
+
+let saveTimer = null
+let savePending = false
+let autoSaveReady = false  // 初始加载完成后才启用
+
+async function autoSave() {
+  if (!autoSaveReady || savePending) return
+  savePending = true
+  try {
+    await updateRecordRows(route.params.entrustNo, buildSavePayload())
+  } catch {
+    // 自动保存失败时静默处理
+  } finally {
+    savePending = false
+  }
+}
+
+function debouncedSave() {
+  if (!autoSaveReady) return
+  if (saveTimer) clearTimeout(saveTimer)
+  saveTimer = setTimeout(autoSave, 1500)
+}
+
+// 监听检测数据变更，触发自动保存
+watch(allRows, () => { debouncedSave() }, { deep: true })
+
+// 监听其他信息变更，触发自动保存
+watch(extra, () => { debouncedSave() }, { deep: true })
+
+// 根据检测数据自动判定检测结论
+let userPickedConclusion = false
+watch(autoConclusion, (val) => {
+  if (!val) return
+  // 仅在用户未手动选择过结论，或结论为空时自动填入
+  if (!userPickedConclusion) {
+    extra.conclusion = val
+  }
+})
+
+// 用户手动选择结论后标记，不再被自动判定覆盖
+watch(() => extra.conclusion, (newVal) => {
+  if (newVal && newVal !== autoConclusion.value) {
+    userPickedConclusion = true
+  }
+})
 
 async function handlePrintPdf() {
   printing.value = true

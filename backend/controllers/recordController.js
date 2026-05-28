@@ -105,7 +105,10 @@ exports.getRecords = async (req, res) => {
             remark_footer: extra.remark_footer || '',
             tester: extra.tester || '',
             reviewer: extra.reviewer || '',
-            test_date: extra.test_date || ''
+            test_date: extra.test_date || '',
+            sand_cylinder: extra.sand_cylinder || '150mm',
+            drying_oven: extra.drying_oven || [],
+            test_basis: extra.test_basis || []
           },
           rows: parsedRows
         });
@@ -703,7 +706,7 @@ async function generateBlankPdf(entrustId, taskId) {
     { label: '结构层次',   value: sharedExtra.structure_layer || materialStr },
     { label: '设计要求',   value: sharedExtra.design_req || '' },
     { label: '最大干密度', value: maxDryDisplay },
-    { label: '检测结论',   value: sharedExtra.conclusion || '' },
+    { label: '检测结论',   value: '' },
     { label: '备    注',   value: sharedExtra.remark_footer || '' },
   ];
 
@@ -762,18 +765,6 @@ async function generateBlankPdf(entrustId, taskId) {
     const result = fillDataRow(xml, sampleLabel, sampleValues, searchPos);
     xml = result.xml;
     searchPos = result.nextPos;
-
-    // 填写页脚信息（试验人、复核人、日期）
-    xml = replaceAfterLabel(xml, '试验人：', sharedExtra.tester || '');
-    xml = replaceAfterLabel(xml, '复核人：', sharedExtra.reviewer || '');
-    if (sharedExtra.test_date) {
-      const parts = String(sharedExtra.test_date).split(/[-/]/);
-      if (parts.length === 3) {
-        xml = replaceAfterLabel(xml, '试验日期：', parts[0]);
-        xml = replaceInRun(xml, '年', parts[1], true);
-        xml = replaceInRun(xml, '月', parts[2], true);
-      }
-    }
 
     zip.file('word/document.xml', xml);
     const tmpDocx = os.tmpdir().replace(/\//g, '\\') + '\\' + `blank_${entrustId}_p${record.page_no}.docx`;
@@ -925,9 +916,9 @@ async function generatePdf(entrustId, taskId) {
     { label: '见证单位',   value: '' },
     { label: '结构层次',   value: sharedExtra.structure_layer || materialStr },
     { label: '设计要求',   value: sharedExtra.design_req || '' },
-    { label: '最大干密度', value: maxDryDisplay },
-    { label: '检测结论',   value: sharedExtra.conclusion || '' },
-    { label: '备    注',   value: sharedExtra.remark_footer || '' },
+    { label: '最大干密度', value: maxDryDisplay, noScale: true },
+    { label: '检测结论',   value: sharedExtra.conclusion || '', align: 'left', noScale: true },
+    { label: '备    注',   value: sharedExtra.remark_footer || '', noScale: true },
   ];
 
   // Step 2: 逐页生成 docx
@@ -969,8 +960,8 @@ async function generatePdf(entrustId, taskId) {
       if (c.label === '见证单位') return { ...c, value: headerData.supervision_unit || entrust.supervision_unit || '' };
       return c;
     });
-    for (const { label, value } of pageCellMap) {
-      xml = fillCellAfter(xml, label, value);
+    for (const { label, value, align, noScale } of pageCellMap) {
+      xml = fillCellAfter(xml, label, value, align, noScale);
     }
 
     let searchPos = 0;
@@ -1005,14 +996,62 @@ async function generatePdf(entrustId, taskId) {
 
     xml = replaceAfterLabel(xml, '试验人：', sharedExtra.tester || '');
     xml = replaceAfterLabel(xml, '复核人：', sharedExtra.reviewer || '');
-    if (sharedExtra.test_date) {
-      const parts = String(sharedExtra.test_date).split(/[-/]/);
-      if (parts.length === 3) {
-        xml = replaceAfterLabel(xml, '试验日期：', parts[0]);
-        xml = replaceInRun(xml, '年', parts[1], true);
-        xml = replaceInRun(xml, '月', parts[2], true);
-      }
+    xml = fillTestDate(xml, sharedExtra.test_date);
+
+    // 提取检测设备/依据单元格，保护其不受字体替换影响
+    const extractCell = (lbl) => {
+      const idx = xml.indexOf(lbl);
+      if (idx === -1) return null;
+      const labelTcEnd = xml.indexOf('</w:tc>', idx);
+      if (labelTcEnd === -1) return null;
+      const cellStart = xml.indexOf('<w:tc', labelTcEnd + 6);
+      if (cellStart === -1) return null;
+      const cellEnd = xml.indexOf('</w:tc>', cellStart);
+      if (cellEnd === -1) return null;
+      const fullEnd = cellEnd + 7;
+      return { cell: xml.substring(cellStart, fullEnd), marker: `__CELL_${lbl}__`, start: cellStart, end: fullEnd };
+    };
+    let eqCell = null, eqMarker = '';
+    const eqR = extractCell('检测设备');
+    if (eqR) { eqCell = eqR.cell; eqMarker = eqR.marker; xml = xml.substring(0, eqR.start) + eqMarker + xml.substring(eqR.end); }
+    let baCell = null, baMarker = '';
+    const baR = extractCell('检测依据');
+    if (baR) { baCell = baR.cell; baMarker = baR.marker; xml = xml.substring(0, baR.start) + baMarker + xml.substring(baR.end); }
+
+    // 全文统一使用霞鹜文楷
+    xml = xml.replace(/w:eastAsia="宋体"/g, 'w:eastAsia="霞鹜文楷"');
+    xml = xml.replace(/w:ascii="Times New Roman"/g, 'w:ascii="霞鹜文楷"');
+    xml = xml.replace(/w:hAnsi="Times New Roman"/g, 'w:hAnsi="霞鹜文楷"');
+
+    // 检测设备：保留模板文字，仅在括号空格中填入数值
+    if (eqCell) {
+      const sandCylinder = sharedExtra.sand_cylinder || '150mm';
+      const dryingOvens = (sharedExtra.drying_oven || []).join('、');
+      eqCell = eqCell.replace(/\(\s+\)（SB143）/, `(${sandCylinder})（SB143）`);
+      eqCell = eqCell.replace(/（\s+）电子秤（SB139）/, `（${dryingOvens}）电子秤（SB139）`);
+      xml = xml.replace(eqMarker, eqCell);
     }
+
+    // 检测依据：保留模板文字，仅把选中的 □ 替换为 ☑
+    if (baCell) {
+      const selected = sharedExtra.test_basis || [];
+      const basisPatterns = [
+        ['JTG 3450-2019', '□《公路路基路面现场测试规程》JTG 3450-2019'],
+        ['GB/T 50123-2019', '□《土工试验方法标准》GB/T 50123-2019'],
+        ['CJJ 1-2008', '□《城镇道路工程施工与质量验收规范》CJJ 1-2008'],
+        ['GB 50268-2008', '□《给水排水管工程施工及验收规范》GB50268-2008'],
+      ];
+      for (const [key, pattern] of basisPatterns) {
+        if (selected.includes(key)) {
+          baCell = baCell.replace(pattern, pattern.replace('□', '☑'));
+        }
+      }
+      xml = xml.replace(baMarker, baCell);
+    }
+
+    // 段落行距设为固定值 17.85pt（357 twips）
+    xml = xml.replace(/<w:spacing\b[^>]*\/>/g, '');
+    xml = xml.replace(/<w:pPr([^>]*[^/])?>/g, '<w:pPr$1><w:spacing w:line="357" w:lineRule="exact"/>');
 
     zip.file('word/document.xml', xml);
     const tmpDocx = os.tmpdir().replace(/\//g, '\\') + '\\' + `record_${entrustId}_p${record.page_no}.docx`;
@@ -1068,11 +1107,10 @@ async function generatePdf(entrustId, taskId) {
 // ===== XML 操作辅助函数 =====
 
 // 在标签文字后找到紧跟的空数据单元格，填入 value
-function fillCellAfter(xml, label, value) {
+function fillCellAfter(xml, label, value, align, noScale) {
   const labelIdx = xml.indexOf(label);
   if (labelIdx === -1) return xml;
 
-  // 精确匹配 <w:tc> 或 <w:tc >（排除 <w:tcPr>）
   const tc1 = xml.lastIndexOf('<w:tc>', labelIdx);
   const tc2 = xml.lastIndexOf('<w:tc ', labelIdx);
   const labelTcStart = Math.max(tc1, tc2);
@@ -1081,31 +1119,27 @@ function fillCellAfter(xml, label, value) {
   const labelTcEnd = xml.indexOf('</w:tc>', labelIdx);
   if (labelTcEnd === -1) return xml;
 
-  // 从标签单元格结束位置之后找下一个 <w:tc>（数据单元格）
   const nextTcStart = xml.indexOf('<w:tc', labelTcEnd + '</w:tc>'.length);
   if (nextTcStart === -1) return xml;
 
   const nextTcEnd = xml.indexOf('</w:tc>', nextTcStart);
   if (nextTcEnd === -1) return xml;
 
-  // 获取 <w:tc> 标签的实际结束位置（可能有属性）
   const tcTagEnd = xml.indexOf('>', nextTcStart);
   let tcContent = xml.substring(tcTagEnd + 1, nextTcEnd);
 
-  // 移除预置干扰文字及所有旧 run（清除模板占位内容）
   tcContent = tcContent.replace(/<w:r[\s>][\s\S]*?<\/w:r>/g, '');
-  // 移除固定列宽，让单元格自适应内容
   tcContent = tcContent.replace(/<w:tcW[^>]*\/>/g, '');
 
-  // 填入新值
+  const alignment = align || 'center';
+
   if (value && tcContent.includes('</w:pPr>')) {
-    // 段落居中
     if (/<w:jc\b/.test(tcContent)) {
-      tcContent = tcContent.replace(/<w:jc w:val="[^"]*"\/>/g, '<w:jc w:val="center"/>');
+      tcContent = tcContent.replace(/<w:jc w:val="[^"]*"\/>/g, `<w:jc w:val="${alignment}"/>`);
     } else {
-      tcContent = tcContent.replace('</w:pPr>', '<w:jc w:val="center"/></w:pPr>');
+      tcContent = tcContent.replace('</w:pPr>', `<w:jc w:val="${alignment}"/></w:pPr>`);
     }
-    const sz = fitFontSize(value);
+    const sz = noScale ? '21' : fitFontSize(value);
     const newRun = `<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="宋体"/><w:sz w:val="${sz}"/><w:szCs w:val="${sz}"/></w:rPr><w:t xml:space="preserve">${escXml(value)}</w:t></w:r>`;
     tcContent = tcContent.replace('</w:pPr>', '</w:pPr>' + newRun);
   }
@@ -1178,22 +1212,29 @@ function fillDataRow(xml, label, values, startPos) {
   return { xml, nextPos: pos };
 }
 
-// 格式化试验日期并填入 XML（支持单日期和日期范围）
+// 格式化试验日期并填入 XML（支持日期范围，跨年自动加年份）
 function fillTestDate(xml, dateStr) {
   if (!dateStr) return xml;
-  const str = String(dateStr);
+  const str = String(dateStr).trim();
   if (str.includes('~')) {
-    const [d1, d2] = str.split('~');
-    const p1 = d1.split('-'); const p2 = d2.split('-');
+    const [d1, d2] = str.split('~').map(s => s.trim());
+    const p1 = d1.split(/[-/]/); const p2 = d2.split(/[-/]/);
     if (p1.length === 3 && p2.length === 3) {
       const formatted = p1[0] === p2[0]
-        ? `${p1[0]}年${p1[1]}月${p1[2]}日～${p2[1]}月${p2[2]}日`
-        : `${p1[0]}年${p1[1]}月${p1[2]}日～${p2[0]}年${p2[1]}月${p2[2]}日`;
+        ? `${parseInt(p1[0])}年${parseInt(p1[1])}月${parseInt(p1[2])}日-${parseInt(p2[1])}月${parseInt(p2[2])}日`
+        : `${parseInt(p1[0])}年${parseInt(p1[1])}月${parseInt(p1[2])}日-${parseInt(p2[0])}年${parseInt(p2[1])}月${parseInt(p2[2])}日`;
       xml = replaceAfterLabel(xml, '试验日期：', formatted);
-      // 清除年/月/日占位符（填入空值）
-      xml = replaceAfterLabel(xml, '年', '');
-      xml = replaceAfterLabel(xml, '月', '');
-      xml = replaceAfterLabel(xml, '日', '');
+      // 清除模板中年/月/日占位符 run
+      const pos = xml.indexOf('试验日期：');
+      if (pos !== -1) {
+        const winEnd = Math.min(pos + 1000, xml.length);
+        xml = xml.substring(0, pos) +
+          xml.substring(pos, winEnd)
+            .replace(/<w:t[^>]*>年<\/w:t>/g, '<w:t></w:t>')
+            .replace(/<w:t[^>]*>月<\/w:t>/g, '<w:t></w:t>')
+            .replace(/<w:t[^>]*>日<\/w:t>/g, '<w:t></w:t>') +
+          xml.substring(winEnd);
+      }
     }
   } else {
     const parts = str.split(/[-/]/);

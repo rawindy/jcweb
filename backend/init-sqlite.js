@@ -165,6 +165,8 @@ CREATE TABLE IF NOT EXISTS biz_compaction_item (
   group_count         INTEGER NOT NULL DEFAULT 1,
   material            TEXT DEFAULT NULL,
   design_requirement  REAL NOT NULL DEFAULT 90.0,
+  design_operator     VARCHAR(5) DEFAULT '≥',
+  design_tolerance    DECIMAL DEFAULT NULL,
   sort                INTEGER NOT NULL DEFAULT 1,
   remark              TEXT DEFAULT NULL
 );
