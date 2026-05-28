@@ -801,25 +801,26 @@ function calcField(row, field) {
       return val > 0 ? bankersRound(val, 0) : ''
     }
     case 'pit_volume': {
-      // 整数(g) / 密度(g/cm³) → 整数(cm³)
+      // 整数(g) / 密度(g/cm³) → 修约到1位(cm³)
       const ps = toNum('sand_before') - toNum('sand_after') - toNum('sand_surface')
       const sd = toNum('sand_density')
       return ps > 0 && sd > 0 ? bankersRound(ps / sd, 0) : ''
     }
     case 'wet_density': {
-      // 湿料质量(g) / 试坑体积(cm³) → 2位小数(g/cm³)
+      // 湿料质量(g) / 试坑体积(修约个位,cm³) → 修约到0.01(g/cm³)
       const ps = toNum('sand_before') - toNum('sand_after') - toNum('sand_surface')
-      const vol = toNum('sand_density') > 0 ? ps / toNum('sand_density') : 0
+      const sd = toNum('sand_density')
+      const vol = sd > 0 ? bankersRound(ps / sd, 0) : 0  // ② 坑体积修约到个位
       const wm = toNum('wet_mass')
-      return vol > 0 && wm > 0 ? bankersRound(wm / vol, 2) : ''
+      return vol > 0 && wm > 0 ? bankersRound(wm / vol, 2) : ''  // ③ 湿密度修约到0.01
     }
     case 'water_content': {
       const bw = toNum('box_wet'); const bd = toNum('box_dry'); const bm = toNum('box_mass')
       const d = bd - bm
-      return d > 0 ? bankersRound((bw - bd) / d * 100, 1) : ''
+      return d > 0 ? bankersRound((bw - bd) / d * 100, 1) : ''  // ⑤ 含水率修约到0.1
     }
     case 'dry_density': {
-      // 湿密度 / (1 + 含水率/100) → 2位小数(g/cm³)
+      // 使用修约后的中间值计算
       const wc = parseFloat(calcField(row, 'water_content')) || 0
       const wd = parseFloat(calcField(row, 'wet_density')) || 0
       return wd > 0 ? bankersRound(wd / (1 + wc / 100), 2) : ''

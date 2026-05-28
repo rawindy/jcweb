@@ -19,13 +19,13 @@ function calcDryDensity(tv) {
 
   const pitSand = sandBefore - sandAfter - sandSurface;
   if (pitSand <= 0 || sandDensity <= 0) return 0;
-  const pitVolume = pitSand / sandDensity;
+  const pitVolume = bankersRound(pitSand / sandDensity, 0); // ② 坑体积修约到个位
   if (pitVolume <= 0 || wetMass <= 0) return 0;
-  const wetDensity = wetMass / pitVolume;
+  const wetDensity = bankersRound(wetMass / pitVolume, 2);  // ③ 湿密度修约到0.01
 
   const dryBox = boxDry - boxMass;
   if (dryBox <= 0) return 0;
-  const waterContent = (boxWet - boxDry) / dryBox * 100;
+  const waterContent = bankersRound((boxWet - boxDry) / dryBox * 100, 1); // ⑤ 含水率修约到0.1%
   if (waterContent < -100) return 0;
 
   const dryDensity = wetDensity / (1 + waterContent / 100);
@@ -36,7 +36,8 @@ function calcDryDensity(tv) {
 function calcCompaction(tv, maxDryDensity) {
   const dd = calcDryDensity(tv);
   if (!dd || !maxDryDensity || maxDryDensity <= 0) return 0;
-  return dd / maxDryDensity * 100;
+  const roundedDd = parseFloat(bankersRound(dd, 2));  // 使用修约后的干密度
+  return roundedDd / maxDryDensity * 100;
 }
 
 // 将计算值注入 test_values（用于保存时）
@@ -44,11 +45,12 @@ function injectComputedValues(testValues, maxDryDensity) {
   const tv = { ...testValues };
   const dry = calcDryDensity(tv);
   if (dry > 0) {
-    tv.dry_density = bankersRound(dry, 2);
+    tv.dry_density = bankersRound(dry, 2);  // ⑥ 干密度修约到2位
   }
   if (dry > 0 && maxDryDensity > 0) {
-    const comp = dry / maxDryDensity * 100;
-    tv.compaction = bankersRound(comp, 1);
+    const dd = parseFloat(tv.dry_density) || dry;  // 使用修约后的干密度
+    const comp = dd / maxDryDensity * 100;
+    tv.compaction = bankersRound(comp, 1);  // ⑦ 压实度修约到1位
   }
   return tv;
 }

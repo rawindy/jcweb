@@ -225,6 +225,11 @@ exports.updateRows = async (req, res) => {
 
         const maxDryDensities = extra.max_dry_densities || {};
 
+        // 构建 部位→材料→MDD 映射（当 test_values 中无 material 时按部位查找）
+        const [compItems] = query('SELECT position_name, material FROM biz_compaction_item WHERE entrust_id = ?', [entrustId]);
+        const posMaterialMap = {};
+        for (const ci of compItems) { posMaterialMap[ci.position_name] = ci.material; }
+
         const [recordResult] = query(
           `INSERT INTO biz_original_record (entrust_id, page_no, total_pages, template_type, header_data, remark, create_time, update_time)
            VALUES (?, ?, ?, ?, ?, ?, datetime('now','localtime'), datetime('now','localtime'))`,
@@ -236,7 +241,7 @@ exports.updateRows = async (req, res) => {
         for (const row of pageRows) {
           // 查找该行的最大干密度
           let maxDry = 0;
-          const mat = row.test_values?.material || row.material || '';
+          const mat = row.test_values?.material || row.material || posMaterialMap[row.position_name] || '';
           if (mat && maxDryDensities[mat]) {
             maxDry = parseFloat(maxDryDensities[mat]) || 0;
           } else {
@@ -1322,19 +1327,20 @@ function calcField(key, tv, maxDryDensity) {
   const boxMass = n('box_mass');
 
   const pitSand = sandBefore - sandAfter - sandSurface;
-  const pitVolume = sandDensity > 0 && pitSand > 0 ? pitSand / sandDensity : 0;
-  const wetDensity = pitVolume > 0 && wetMass > 0 ? wetMass / pitVolume : 0;
+  const pitVolume = sandDensity > 0 && pitSand > 0 ? bankersRound(pitSand / sandDensity, 0) : 0;       // ② 修约到个位
+  const wetDensity = pitVolume > 0 && wetMass > 0 ? bankersRound(wetMass / pitVolume, 2) : 0;           // ③ 修约到0.01
   const dryMass = boxDry - boxMass;
-  const waterContent = dryMass > 0 ? (boxWet - boxDry) / dryMass * 100 : 0;
+  const waterContent = dryMass > 0 ? bankersRound((boxWet - boxDry) / dryMass * 100, 1) : 0;            // ⑤ 修约到0.1
   const dryDensity = wetDensity > 0 ? wetDensity / (1 + waterContent / 100) : 0;
-  const compaction = maxDryDensity > 0 && dryDensity > 0 ? dryDensity / maxDryDensity * 100 : 0;
+  const roundedDd = dryDensity > 0 ? bankersRound(dryDensity, 2) : '';
+  const compaction = maxDryDensity > 0 && dryDensity > 0 ? parseFloat(roundedDd) / maxDryDensity * 100 : 0;
 
   switch (key) {
     case 'pit_sand':      return pitSand > 0 ? bankersRound(pitSand, 0) : '';
-    case 'pit_volume':    return pitVolume > 0 ? bankersRound(pitVolume, 0) : '';
-    case 'wet_density':   return wetDensity > 0 ? bankersRound(wetDensity, 2) : '';
-    case 'water_content': return waterContent > 0 ? bankersRound(waterContent, 1) : '';
-    case 'dry_density':   return dryDensity > 0 ? bankersRound(dryDensity, 2) : '';
+    case 'pit_volume':    return pitVolume > 0 ? pitVolume : '';
+    case 'wet_density':   return wetDensity > 0 ? wetDensity : '';
+    case 'water_content': return waterContent > 0 ? waterContent : '';
+    case 'dry_density':   return roundedDd;
     case 'compaction':    return compaction > 0 ? bankersRound(compaction, 1) : '';
     default: return '';
   }

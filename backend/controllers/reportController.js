@@ -7,6 +7,7 @@ const { getDb } = require('../config/db');
 const { fillCoverPage, escXml } = require('../utils/reportCoverPage');
 const { batchDocxToPdf } = require('../utils/pdfConverter');
 const { calcDryDensity } = require('../utils/compaction');
+const { bankersRound } = require('../utils/rounding');
 
 // 内存任务存储（与 recordController 的 printJobs 模式一致）
 const reportJobs = new Map();
@@ -394,7 +395,11 @@ async function generateReportPdf(entrustId, headerData, taskId) {
   for (const item of items) {
     positionDesigns[item.position_name] = makeItemDesign(item);
   }
-  xml = fillAllDataTables(xml, rows, positionDesigns, maxDryDensities);
+  // 构建 部位→材料 映射（当 test_values 中无 material 时按部位查找）
+  const posMaterialMap = {};
+  for (const ci of items) { posMaterialMap[ci.position_name] = ci.material; }
+
+  xml = fillAllDataTables(xml, rows, positionDesigns, maxDryDensities, posMaterialMap);
 
   // 保存 DOCX
   baseZip.file('word/document.xml', xml);
@@ -469,7 +474,7 @@ function removePageHeaderLine(bodyXml) {
 }
 
 // 填充分页的数据表
-function fillAllDataTables(xml, rows, positionDesigns, maxDryDensities) {
+function fillAllDataTables(xml, rows, positionDesigns, maxDryDensities, posMaterialMap) {
   const dataPages = Math.ceil(rows.length / ROWS_PER_PAGE);
 
   let searchFrom = 0;
@@ -477,7 +482,7 @@ function fillAllDataTables(xml, rows, positionDesigns, maxDryDensities) {
     const pageRows = rows.slice(page * ROWS_PER_PAGE, (page + 1) * ROWS_PER_PAGE);
     // 整表流水起始序号
     const baseSeq = page * ROWS_PER_PAGE + 1;
-    xml = fillOneDataTable(xml, pageRows, positionDesigns, maxDryDensities, baseSeq, searchFrom);
+    xml = fillOneDataTable(xml, pageRows, positionDesigns, maxDryDensities, baseSeq, searchFrom, posMaterialMap);
     searchFrom = xml.indexOf('</w:tbl>', xml.indexOf('试样编号', searchFrom)) + '</w:tbl>'.length;
     if (searchFrom < '</w:tbl>'.length) searchFrom = 0;
   }
@@ -486,7 +491,7 @@ function fillAllDataTables(xml, rows, positionDesigns, maxDryDensities) {
 }
 
 // 填充单个数据表（9列：序号|试样编号|取样桩号(vMerge)|取样位置(vMerge,2段)|层位|设计要求|干密度|压实度|单项判定）
-function fillOneDataTable(xml, pageRows, positionDesigns, maxDryDensities, baseSeq, startFrom) {
+function fillOneDataTable(xml, pageRows, positionDesigns, maxDryDensities, baseSeq, startFrom, posMaterialMap) {
   const headerIdx = xml.indexOf('试样编号', startFrom);
   if (headerIdx === -1) return xml;
 
@@ -527,8 +532,9 @@ function fillOneDataTable(xml, pageRows, positionDesigns, maxDryDensities, baseS
 
   // 构建行数据，按 3 行一组
   // 查找材料对应的最大干密度
-  function getMaxDry(material) {
-    if (material && maxDryDensities[material]) return parseFloat(maxDryDensities[material]);
+  function getMaxDry(material, position) {
+    const mat = material || posMaterialMap[position] || '';
+    if (mat && maxDryDensities[mat]) return parseFloat(maxDryDensities[mat]);
     const vals = Object.values(maxDryDensities).filter(Boolean);
     return vals.length > 0 ? parseFloat(vals[0]) : 0;
   }
@@ -546,14 +552,12 @@ function fillOneDataTable(xml, pageRows, positionDesigns, maxDryDensities, baseS
     if (!posSide && posName === '管底') posSide = '底侧';
     else if (!posSide && posName === '管顶') posSide = '上侧';
 
-    // 优先用记录单已存储的计算值，旧数据回退到实时计算
-    let dryDensity = tv.dry_density ? parseFloat(tv.dry_density) : 0;
-    let compaction = tv.compaction ? parseFloat(tv.compaction) : 0;
-    if (!dryDensity) dryDensity = calcDryDensity(tv);
-    if (!compaction && dryDensity > 0) {
-      const maxDry = getMaxDry(tv.material || rd.material);
-      if (maxDry > 0) compaction = dryDensity / maxDry * 100;
-    }
+    // 干密度直接用存储值（不依赖MDD，存储值可靠）
+    const dryDensity = tv.dry_density ? parseFloat(tv.dry_density) : 0;
+    // 压实度从原始数据重算（MDD可能已变更，存储值可能过期）
+    const rawDD = dryDensity || calcDryDensity(tv);
+    const maxDry = getMaxDry(tv.material || rd.material, rd.position_name);
+    const compaction = rawDD > 0 && maxDry > 0 ? parseFloat(bankersRound(rawDD / maxDry * 100, 1)) : 0;
 
     // 按部位查找设计要求
     const posKey = rd.position_name || '';
@@ -773,8 +777,11 @@ exports.getReportData = async (req, res) => {
 
     // 最大干密度查找（用于旧数据回退计算）
     const maxDryDensities = extra.max_dry_densities || {};
-    function getMaxDry(material) {
-      if (material && maxDryDensities[material]) return parseFloat(maxDryDensities[material]);
+    const posMaterialMap = {};
+    for (const ci of items) { posMaterialMap[ci.position_name] = ci.material; }
+    function getMaxDry(material, position) {
+      const mat = material || posMaterialMap[position] || '';
+      if (mat && maxDryDensities[mat]) return parseFloat(maxDryDensities[mat]);
       const vals = Object.values(maxDryDensities).filter(Boolean);
       return vals.length > 0 ? parseFloat(vals[0]) : 0;
     }
@@ -823,14 +830,12 @@ exports.getReportData = async (req, res) => {
           const tv = r.test_values || {};
           const rawPosition = tv.position || r.position_name || '';
 
-          // 优先用记录单已存储的计算值，旧数据回退到实时计算
-          let dryDensity = tv.dry_density ? parseFloat(tv.dry_density) : 0;
-          let comp = tv.compaction ? parseFloat(tv.compaction) : 0;
-          if (!dryDensity) dryDensity = calcDryDensity(tv);
-          if (!comp && dryDensity > 0) {
-            const maxDry = getMaxDry(tv.material || r.material);
-            if (maxDry > 0) comp = dryDensity / maxDry * 100;
-          }
+          // 干密度直接用存储值（不依赖MDD，存储值可靠）
+          const dryDensity = tv.dry_density ? parseFloat(tv.dry_density) : 0;
+          // 压实度从原始数据重算（MDD可能已变更，存储值可能过期）
+          const rawDD = dryDensity || calcDryDensity(tv);
+          const maxDry = getMaxDry(tv.material || r.material, r.position_name);
+          const comp = rawDD > 0 && maxDry > 0 ? parseFloat(bankersRound(rawDD / maxDry * 100, 1)) : 0;
 
           // 解析侧位
           let posName = rawPosition;
@@ -872,6 +877,27 @@ exports.getReportData = async (req, res) => {
         entrust_no: entrust.entrust_no,
       },
     });
+
+    // 异步更新数据库中的压实度（MDD可能已变更，存储值可能过期；干密度不受MDD影响，无需更新）
+    try {
+      const db = getDb();
+      const updateStmt = db.prepare('UPDATE biz_original_record_item SET test_values = ? WHERE id = ?');
+      db.transaction(() => {
+        for (const r of rows) {
+          const tv = r.test_values || {};
+          const dd = tv.dry_density ? parseFloat(tv.dry_density) : 0;
+          const rawDD = dd || calcDryDensity(tv);
+          const maxDry = getMaxDry(tv.material || r.material, r.position_name);
+          const newComp = rawDD > 0 && maxDry > 0 ? bankersRound(rawDD / maxDry * 100, 1) : '';
+          if (newComp !== String(tv.compaction || '')) {
+            const updated = { ...tv, compaction: newComp };
+            updateStmt.run(JSON.stringify(updated), r.id);
+          }
+        }
+      })();
+    } catch (e) {
+      console.error('更新计算值失败:', e.message);
+    }
   } catch (err) {
     res.status(500).json({ code: 500, message: err.message });
   }
