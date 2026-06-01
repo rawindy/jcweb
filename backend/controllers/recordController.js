@@ -730,11 +730,15 @@ async function generateBlankPdf(entrustId, taskId) {
     const [rows] = query(
       'SELECT * FROM biz_original_record_item WHERE record_id = ? ORDER BY seq_no', [record.id]
     );
-    const parsedRows = rows.map(r => ({
-      ...r,
-      test_values: typeof r.test_values === 'string'
-        ? JSON.parse(r.test_values) : (r.test_values || {})
-    }));
+    const parsedRows = rows.map(r => {
+      const item = items.find(it => it.position_name === r.position_name);
+      return {
+        ...r,
+        material: item?.material || '',
+        test_values: typeof r.test_values === 'string'
+          ? JSON.parse(r.test_values) : (r.test_values || {})
+      };
+    });
 
     const zip = new PizZip(fs.readFileSync(templatePath));
     let xml = zip.files['word/document.xml'].asText();
@@ -941,11 +945,15 @@ async function generatePdf(entrustId, taskId) {
     const [rows] = query(
       'SELECT * FROM biz_original_record_item WHERE record_id = ? ORDER BY seq_no', [record.id]
     );
-    const parsedRows = rows.map(r => ({
-      ...r,
-      test_values: typeof r.test_values === 'string'
-        ? JSON.parse(r.test_values) : (r.test_values || {})
-    }));
+    const parsedRows = rows.map(r => {
+      const item = items.find(it => it.position_name === r.position_name);
+      return {
+        ...r,
+        material: item?.material || '',
+        test_values: typeof r.test_values === 'string'
+          ? JSON.parse(r.test_values) : (r.test_values || {})
+      };
+    });
 
     const zip = new PizZip(fs.readFileSync(templatePath));
     let xml = zip.files['word/document.xml'].asText();

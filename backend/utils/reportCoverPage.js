@@ -37,21 +37,14 @@ function replaceCoverValue(xml, label, value) {
   const pPrEnd = xml.indexOf('</w:pPr>', pPrStart) + '</w:pPr>'.length;
   let pPr = xml.substring(pPrStart, pPrEnd);
 
-  // 移除悬挂缩进，改用 tab 止点精确对齐换行
-  pPr = pPr.replace(/\s*w:hangingChars="[^"]*"/g, '');
-  pPr = pPr.replace(/\s*w:hanging="[^"]*"/g, '');
-
-  // 添加 tab 止点（与 w:left 同位置，确保换行后文本与 tab 后的值对齐）
-  if (!pPr.includes('<w:tabs>')) {
-    pPr = pPr.replace('</w:pPr>', '<w:tabs><w:tab w:val="left" w:pos="3186"/></w:tabs></w:pPr>');
-  }
+  // 模板自身悬挂缩进 5 字符已经正确，不再修改 pPr
 
   const escVal = escXml(value);
-  // 标签后插入 tab 再跟值，tab 会跳到 3186 twips 处，换行后的行也以 w:left="3186" 对齐
-  const tabAndValue = `<w:tab/><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="宋体"/><w:sz w:val="30"/><w:szCs w:val="30"/><w:b/></w:rPr><w:t xml:space="preserve">${escVal}</w:t></w:r>`;
+  // 直接在标签后追加值文本，标签→值之间无 tab，依靠模板 w:left/w:hanging 控制换行对齐
+  const valueRun = `<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="宋体"/><w:sz w:val="30"/><w:szCs w:val="30"/><w:b/></w:rPr><w:t xml:space="preserve">${escVal}</w:t></w:r>`;
 
   return xml.substring(0, pPrStart) + pPr +
-         xml.substring(pPrEnd, afterLabelRun) + tabAndValue +
+         xml.substring(pPrEnd, afterLabelRun) + valueRun +
          xml.substring(paraEnd);
 }
 

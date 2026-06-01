@@ -10,4 +10,5 @@ Thumbs.db
 temp/*.pdf
 tools/
 .claude/
+.reasonix/
 /package-lock.json

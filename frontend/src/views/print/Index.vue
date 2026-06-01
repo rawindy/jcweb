@@ -254,7 +254,7 @@
               <el-input v-model="row.stake_no" size="small" class="table-edit-input" />
             </template>
           </el-table-column>
-          <el-table-column label="取样位置" width="110" align="center">
+          <el-table-column label="取样位置（部位）" width="110" align="center">
             <template #default="{ row }">
               <el-input v-model="row.position_name" size="small" class="table-edit-input" />
             </template>
@@ -325,7 +325,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { getEntrustList } from '../../api/entrust'
 import { getReportData, saveReportData, startReportPrint, getReportPrintStatus, downloadReportPrint } from '../../api/report'
 
@@ -352,7 +352,7 @@ const form = reactive({
 })
 
 const dataRows = ref([])
-const dataRowsPerPage = 9
+const dataRowsPerPage = 18
 const samplingDateRange = ref(null)
 
 const totalReportPages = computed(() => {
@@ -365,9 +365,9 @@ const designReqStr = computed(() => {
   return dataRows.value[0]?.design_requirement || '—'
 })
 
-// 每3行合并：取样桩号(1)、取样位置(2)、侧位(3) — 对齐模板三格并一格
+// 每3行合并：取样桩号(1)、取样位置(2)
 function spanMethod({ rowIndex, columnIndex }) {
-  if (columnIndex === 1 || columnIndex === 2 || columnIndex === 3) {
+  if (columnIndex === 1 || columnIndex === 2) {
     const groupStart = Math.floor(rowIndex / 3) * 3
     const posInGroup = rowIndex - groupStart
     if (posInGroup === 0) {
@@ -413,7 +413,18 @@ function tableRowClass({ row }) {
 }
 
 onMounted(() => fetchData())
-onBeforeUnmount(() => { if (printPollTimer) clearInterval(printPollTimer) })
+onBeforeUnmount(() => { if (printPollTimer) clearInterval(printPollTimer); if (autoSaveTimer) clearTimeout(autoSaveTimer) })
+
+// 自动保存
+let autoSaveTimer = null
+let autoSaveReady = false
+watch(dataRows, () => { if (autoSaveReady) debouncedAutoSave() }, { deep: true })
+watch(form, () => { if (autoSaveReady) debouncedAutoSave() }, { deep: true })
+
+function debouncedAutoSave() {
+  if (autoSaveTimer) clearTimeout(autoSaveTimer)
+  autoSaveTimer = setTimeout(() => handleSave(), 2000)
+}
 
 function handleFilter() {
   pagination.page = 1
@@ -434,6 +445,7 @@ async function fetchData() {
 }
 
 async function handleSelect(row) {
+  autoSaveReady = false
   selectedEntrustId.value = row.id
   selectedEntrustNo.value = row.entrust_no
 
@@ -476,12 +488,15 @@ async function handleSelect(row) {
     dataRows.value = d.data_rows || []
 
     selected.value = true
+    // 延迟启用自动保存，避免加载时触发
+    setTimeout(() => { autoSaveReady = true }, 1000)
   } catch {
     selected.value = true
   }
 }
 
 function handleClear() {
+  autoSaveReady = false
   selected.value = false
   selectedEntrustId.value = null
   selectedEntrustNo.value = ''
@@ -509,9 +524,14 @@ async function handleSave() {
       test_equipment: form.test_equipment,
       max_dry_density: form.max_dry_density,
       conclusion: form.conclusion,
+      data_rows: dataRows.value.map(r => ({
+        id: r.id,
+        stake_no: r.stake_no,
+        position_name: r.position_name,
+        position_side: r.position_side,
+      })),
     }
     await saveReportData(selectedEntrustId.value, payload)
-    // 更新缓存的原始数据
     originalForm = JSON.parse(JSON.stringify(payload))
     ElMessage.success('保存成功')
   } catch {
@@ -561,6 +581,8 @@ async function handleInit() {
     form.max_dry_density = d.info.max_dry_density
     form.conclusion = d.info.conclusion || defaultConclusion()
     dataRows.value = d.data_rows || []
+    autoSaveReady = false
+    setTimeout(() => { autoSaveReady = true }, 1000)
     ElMessage.success('已初始化')
   } catch {
     ElMessage.error('初始化失败')

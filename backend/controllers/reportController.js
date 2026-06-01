@@ -43,7 +43,7 @@ function fitFontSize(text) {
 }
 
 // 在表格中，找到含 label 的单元格，填充其后第一个空单元格
-function fillCellAfter(xml, label, value) {
+function fillCellAfter(xml, label, value, noScale, align) {
   const labelIdx = xml.indexOf(label);
   if (labelIdx === -1) return xml;
 
@@ -68,11 +68,11 @@ function fillCellAfter(xml, label, value) {
 
   if (value && tcContent.includes('</w:pPr>')) {
     if (/<w:jc\b/.test(tcContent)) {
-      tcContent = tcContent.replace(/<w:jc w:val="[^"]*"\/>/g, '<w:jc w:val="center"/>');
+      tcContent = tcContent.replace(/<w:jc w:val="[^"]*"\/>/g, `<w:jc w:val="${align || 'center'}"/>`);
     } else {
-      tcContent = tcContent.replace('</w:pPr>', '<w:jc w:val="center"/></w:pPr>');
+      tcContent = tcContent.replace('</w:pPr>', `<w:jc w:val="${align || 'center'}"/></w:pPr>`);
     }
-    const sz = fitFontSize(value);
+    const sz = noScale ? '21' : fitFontSize(value);
     const newRun = `<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="宋体"/><w:sz w:val="${sz}"/><w:szCs w:val="${sz}"/></w:rPr><w:t xml:space="preserve">${escXml(value)}</w:t></w:r>`;
     tcContent = tcContent.replace('</w:pPr>', '</w:pPr>' + newRun);
   }
@@ -167,16 +167,15 @@ async function fetchReportData(entrustId) {
 const TEMPLATE_DIR = path.join(__dirname, '..', '..', 'temp');
 const TEMPLATE_COVER = path.join(TEMPLATE_DIR, '检测报告封面页.docx');
 const TEMPLATE_INFO = path.join(TEMPLATE_DIR, '检测报告信息页.docx');
-const TEMPLATE_DATA = path.join(TEMPLATE_DIR, '检测报告管道详情数据页.docx');
+const TEMPLATE_DATA = path.join(TEMPLATE_DIR, '检测报告管道详情数据页 .docx');
 const ROWS_PER_PAGE = 18;
 
-// 从封面 body 中提取底部两段（公司名称 + 地址），返回清理后的 body 和提取的段落 XML
+// 从封面 body 中提取底部两段（公司名称 + 地址）作为页脚，正文不再包含它们
 function extractFooterFromCoverBody(bodyXml) {
   const companyText = '余姚市姚州建设工程检测有限公司';
   const idx = bodyXml.indexOf(companyText);
   if (idx === -1) return { body: bodyXml, footerParas: '' };
 
-  // 用正则找真正的段落起始标签 <w:p> 或 <w:p ...>（排除 <w:pPr>）
   const re = /<w:p[>\s]/g;
   let m, pStart = -1;
   while ((m = re.exec(bodyXml)) !== null) {
@@ -198,7 +197,7 @@ function extractFooterFromCoverBody(bodyXml) {
   return { body: cleanBody, footerParas };
 }
 
-// 将底部段落包装为标准 OOXML 页脚
+// 将公司信息段落包装为标准 OOXML 页脚
 function buildFooterXml(footerParas) {
   let cleaned = footerParas
     .replace(/w:ascii="宋体"/g, 'w:ascii="Times New Roman"')
@@ -215,7 +214,7 @@ ${cleaned}
 </w:ftr>`;
 }
 
-// 将页脚文件注入 DOCX ZIP（添加文件、更新 Content_Types 和 rels）
+// 将页脚文件注入 DOCX ZIP（封面专用）
 function injectFooterToZip(baseZip, footerXml) {
   baseZip.file('word/footer1.xml', footerXml);
 
@@ -230,22 +229,12 @@ function injectFooterToZip(baseZip, footerXml) {
   baseZip.file('word/_rels/document.xml.rels', rels);
 }
 
-// 从 DOCX 提取 body 内容（不含 sectPr）
-function extractDocxBody(docxPath) {
-  const z = new PizZip(fs.readFileSync(docxPath));
-  const x = z.files['word/document.xml'].asText();
-  const bodyStart = x.indexOf('<w:body>') + '<w:body>'.length;
-  const sectPrStart = x.lastIndexOf('<w:sectPr');
-  return x.substring(bodyStart, sectPrStart);
-}
-
-// 从 DOCX 提取 sectPr
-function extractDocxSectPr(docxPath) {
-  const z = new PizZip(fs.readFileSync(docxPath));
-  const x = z.files['word/document.xml'].asText();
-  const sectPrStart = x.lastIndexOf('<w:sectPr');
-  const sectPrEnd = x.indexOf('</w:sectPr>', sectPrStart) + '</w:sectPr>'.length;
-  return x.substring(sectPrStart, sectPrEnd);
+// 全局字体修复（提取为公共函数）
+function fixDocxFont(xml) {
+  return xml
+    .replace(/w:ascii="宋体"/g, 'w:ascii="Times New Roman"')
+    .replace(/w:hAnsi="宋体"/g, 'w:hAnsi="Times New Roman"')
+    .replace(/w:hint="eastAsia"/g, '');
 }
 
 // ===== 报告生成 =====
@@ -256,176 +245,193 @@ async function generateReportPdf(entrustId, headerData, taskId) {
   };
 
   // Step 1: 查询数据
-  update(1, 4, '正在查询数据...');
+  update(1, 5, '正在查询数据...');
   await yield_();
   const data = await fetchReportData(entrustId);
   const { entrust, items, rows, extra, totalSamples } = data;
   const entrustNo = entrust.entrust_no;
 
-  // Step 2: 合并模板 + 填充数据
-  update(2, 4, '正在生成报告文档...');
-  await yield_();
-
-  // 检查模板文件
   if (!fs.existsSync(TEMPLATE_COVER)) throw new Error('封面模板不存在');
   if (!fs.existsSync(TEMPLATE_INFO)) throw new Error('信息页模板不存在');
   if (!fs.existsSync(TEMPLATE_DATA)) throw new Error('数据页模板不存在');
 
-  // 用封面模板作为基础 ZIP（字体、样式等）
-  const baseZip = new PizZip(fs.readFileSync(TEMPLATE_COVER));
-  let baseXml = baseZip.files['word/document.xml'].asText();
-
-  const coverBody = extractDocxBody(TEMPLATE_COVER);
-  const infoBody = extractDocxBody(TEMPLATE_INFO);
-  const dataBody = extractDocxBody(TEMPLATE_DATA);
-  const sectPr = extractDocxSectPr(TEMPLATE_COVER);
-
-  // 封面 sectPr（无页眉、有页脚、nextPage 分节），嵌入段落作为节分隔符
-  const coverSectPr = sectPr
-    .replace(/<w:headerReference[^>]*\/>/g, '')
-    .replace('<w:pgSz', '<w:type w:val="nextPage"/><w:footerReference w:type="default" r:id="rId10"/><w:pgSz');
-  const coverSectionBreak = `<w:p><w:pPr>${coverSectPr}</w:pPr></w:p>`;
-
-  // 计算数据页数（封面不编页码，从信息页开始）
-  const dataPages = Math.max(1, Math.ceil(rows.length / ROWS_PER_PAGE));
-  const totalReportPages = 1 + dataPages; // 信息页 + 数据页
-
-  // 封面无页码，信息页 = 第1页
-  // 封面 body 中如有页头行则清除，底部两行移入页脚
-  const coverBodyClean = removePageHeaderLine(coverBody);
-  const { body: coverBodyFinal, footerParas } = extractFooterFromCoverBody(coverBodyClean);
-  const footerXml = buildFooterXml(footerParas);
-  injectFooterToZip(baseZip, footerXml);
-
-  let infoBodyFilled = fillPageHeaderLine(infoBody, entrustNo, 1, totalReportPages);
-
-  // 组装完整 body：封面 + 节分隔（含页脚引用的 sectPr）+ 信息页 + 数据页
-  let allBody = coverBodyFinal + coverSectionBreak + infoBodyFilled;
-  for (let i = 0; i < dataPages; i++) {
-    let pageBody = fillPageHeaderLine(dataBody, entrustNo, 2 + i, totalReportPages);
-    allBody += pageBody;
-  }
-
-  // 组装完整 document.xml（末尾 sectPr 用于信息页+数据页，无页脚）
-  const docPrologue = baseXml.substring(0, baseXml.indexOf('<w:body>'));
-  const docEpilogue = baseXml.substring(baseXml.indexOf('</w:body>') + '</w:body>'.length);
-
-  let xml = docPrologue + '<w:body>' + allBody + sectPr + '</w:body>' + docEpilogue;
-
-  // 全局字体修复
-  xml = xml.replace(/w:ascii="宋体"/g, 'w:ascii="Times New Roman"');
-  xml = xml.replace(/w:hAnsi="宋体"/g, 'w:hAnsi="Times New Roman"');
-  xml = xml.replace(/w:hint="eastAsia"/g, '');
-
-  // === 填充封面 ===
   const categoryNames = { 'SYS': '管道压实度（灌砂法）' };
-  xml = fillCoverPage(xml, {
-    report_no: entrustNo,
-    project_name: headerData.project_name || entrust.project_name || '',
-    client_unit: headerData.client_unit || entrust.client_unit || '',
-    test_item: headerData.test_item || categoryNames[entrust.category_code] || entrust.entrust_type || '',
-    report_date: headerData.report_date || '',
-  });
+  const dataPages = Math.max(1, Math.ceil(rows.length / ROWS_PER_PAGE));
+  const totalReportPages = 1 + dataPages;
+  const ts = Date.now();
+  const convertPairs = [];
 
-  // === 填充信息页 ===
-  // 信息页表格字段（页头已在合并前预填充）
-  const infoFields = [
-    { label: '工程名称', value: headerData.project_name || entrust.project_name || '' },
-    { label: '检测类别', value: headerData.entrust_type || entrust.entrust_type || '' },
-    { label: '委托单位', value: headerData.client_unit || entrust.client_unit || '' },
-    { label: '建设单位', value: headerData.build_unit || entrust.build_unit || '' },
-    { label: '施工单位', value: headerData.construction_unit || entrust.construction_unit || '' },
-    { label: '见证单位', value: headerData.supervision_unit || entrust.supervision_unit || '' },
-    { label: '检测项目', value: headerData.test_item || categoryNames[entrust.category_code] || '' },
-    { label: '见证人', value: headerData.witness_person || entrust.witness_person || '' },
-    { label: '样本数量', value: `${totalSamples}点` },
-    { label: '取样日期', value: headerData.sampling_date || '' },
-    { label: '检测日期', value: headerData.test_date || '' },
-    { label: '报告日期', value: headerData.report_date || '' },
-    { label: '路段桩号', value: headerData.section_pile || data.defaultSectionPile },
-    { label: '结构部位', value: headerData.structure_part || extra.structure_layer || [...new Set(items.map(i => i.position_name).filter(Boolean))].join('、') },
-  ];
-
-  for (const { label, value } of infoFields) {
-    xml = fillCellAfter(xml, label, value);
-  }
-
-  // 检测依据
-  const testBasis = headerData.test_basis || extra.test_basis || [];
-  const basisMap = {
-    'JTG 3450-2019': '《公路路基路面现场测试规程》（JTG 3450—2019）',
-    'GB/T 50123-2019': '《土工试验方法标准》（GB/T 50123—2019）',
-    'CJJ 1-2008': '《城镇道路工程施工与质量验收规范》（CJJ 1—2008）',
-    'GB 50268-2008': '《给水排水管工程施工及验收规范》（GB 50268—2008）',
-  };
-  const basisText = (Array.isArray(testBasis) ? testBasis : []).map(b => basisMap[b] || b).join('\n');
-  xml = fillCellAfter(xml, '检测依据', basisText);
-
-  // 检测设备
-  const equipment = headerData.test_equipment || {};
-  const sandCylinder = equipment.sand_cylinder || extra.sand_cylinder || '150mm';
-  const dryingOvens = equipment.drying_oven || extra.drying_oven || [];
-  const ovenList = (Array.isArray(dryingOvens) ? dryingOvens : []).map(code => `电热鼓风干燥箱（${code}）`).join('、');
-  const equipText = ovenList
-    ? `灌砂筒（${sandCylinder}）（SB143） 电子秤（SB133）${ovenList} 电子秤（SB139）`
-    : `灌砂筒（${sandCylinder}）（SB143） 电子秤（SB133） 电子秤（SB139）`;
-  xml = fillCellAfter(xml, '检测设备', equipText);
-
-  // 检测结论（报告结论，非记录单结论）
-  const dataPageStart = 2;
-  const dataPageEnd = 1 + dataPages;
-  const pageRef = dataPages <= 1 ? `第${dataPageStart}页` : `第${dataPageStart}-${dataPageEnd}页`;
-  const defaultConclusionText = `依据《公路路基路面现场测试规程》（JTG 3450—2019）进行检测，所检测项目结果符合《给水排水管工程施工及验收规范》GB 50268-2008的标准和设计要求。详见报告${pageRef}。`;
-  const conclusion = headerData.conclusion || extra.conclusion || defaultConclusionText;
-  xml = fillCellAfter(xml, '检测结论', conclusion);
-
-  // 备注 — 最大干密度
-  const maxDryDensities = extra.max_dry_densities || {};
-  const mdValue = headerData.max_dry_density || (
-    Object.keys(maxDryDensities).length > 0
-      ? Object.entries(maxDryDensities).filter(([, v]) => v).map(([k, v]) => `${k}：${v} g/cm³`).join('，')
-      : ''
-  );
-  xml = fillCellAfter(xml, '备    注', mdValue ? `最大干密度：${mdValue}` : '');
-
-  // === 填充数据表（多页） ===
-  update(3, 4, '正在生成报告文档...');
-  // 构建部位 → 设计要求映射
-  const positionDesigns = {};
-  for (const item of items) {
-    positionDesigns[item.position_name] = makeItemDesign(item);
-  }
-  // 构建 部位→材料 映射（当 test_values 中无 material 时按部位查找）
-  const posMaterialMap = {};
-  for (const ci of items) { posMaterialMap[ci.position_name] = ci.material; }
-
-  xml = fillAllDataTables(xml, rows, positionDesigns, maxDryDensities, posMaterialMap);
-
-  // 保存 DOCX
-  baseZip.file('word/document.xml', xml);
-  const tmpDocx = path.join(os.tmpdir(), `report_${entrustId}_${Date.now()}.docx`);
-  fs.writeFileSync(tmpDocx, baseZip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }));
-
-  // Step 4: 转换 PDF
-  update(4, 4, '正在转换 PDF...');
+  // ==================== 封面 DOCX ====================
+  update(2, 5, '正在生成封面...');
   await yield_();
-  const tmpPdf = tmpDocx.replace(/\.docx$/, '.pdf');
-  await batchDocxToPdf([{ docx: tmpDocx, pdf: tmpPdf }]);
+  {
+    const z = new PizZip(fs.readFileSync(TEMPLATE_COVER));
+    let xml = z.files['word/document.xml'].asText();
+    xml = fixDocxFont(xml);
 
-  // 清理并保存
-  const finalPdf = path.join(os.tmpdir(), `report_${entrustNo}_${Date.now().toString(36)}.pdf`);
-  if (fs.existsSync(tmpPdf)) {
-    fs.copyFileSync(tmpPdf, finalPdf);
-    try { fs.unlinkSync(tmpPdf); } catch {}
-  } else if (fs.existsSync(tmpDocx.replace(/\.docx$/, '.pdf'))) {
-    const loPdf = tmpDocx.replace(/\.docx$/, '.pdf');
-    fs.copyFileSync(loPdf, finalPdf);
-    try { fs.unlinkSync(loPdf); } catch {}
+    // 移除页头行（封面无该行，NOOP 但安全）
+    xml = removePageHeaderLine(xml);
+
+    // 公司信息从正文分离 → 页脚，防止被长内容挤出
+    const { body: xmlBody, footerParas } = extractFooterFromCoverBody(xml);
+    if (footerParas) {
+      xml = xmlBody;
+      injectFooterToZip(z, buildFooterXml(footerParas));
+    }
+
+    // sectPr: headerRef → footerRef, 调整页脚位置
+    xml = xml.replace(/<w:headerReference[^>]*\/>/g, '<w:footerReference w:type="default" r:id="rId10"/>');
+    xml = xml.replace(/w:footer="992"/, 'w:footer="1800"');
+
+    // 填充封面字段
+    xml = fillCoverPage(xml, {
+      report_no: entrustNo,
+      project_name: headerData.project_name || entrust.project_name || '',
+      client_unit: headerData.client_unit || entrust.client_unit || '',
+      test_item: headerData.test_item || categoryNames[entrust.category_code] || entrust.entrust_type || '',
+      report_date: headerData.report_date || '',
+    });
+
+    z.file('word/document.xml', xml);
+    const docxPath = path.join(os.tmpdir(), `report_cover_${ts}.docx`);
+    fs.writeFileSync(docxPath, z.generate({ type: 'nodebuffer', compression: 'DEFLATE' }));
+    convertPairs.push({ docx: docxPath, pdf: docxPath.replace(/\.docx$/, '.pdf'), sort: 0 });
   }
-  try { fs.unlinkSync(tmpDocx); } catch {}
+
+  // ==================== 信息页 DOCX ====================
+  update(3, 5, '正在生成信息页...');
+  await yield_();
+  {
+    const z = new PizZip(fs.readFileSync(TEMPLATE_INFO));
+    let xml = z.files['word/document.xml'].asText();
+    xml = fixDocxFont(xml);
+
+    // 页头：报告编号 + 页码
+    xml = fillPageHeaderLine(xml, entrustNo, 1, totalReportPages);
+
+    // 表格字段
+    const fields = [
+      { label: '工程名称', value: headerData.project_name || entrust.project_name || '' },
+      { label: '检测类别', value: headerData.entrust_type || entrust.entrust_type || '' },
+      { label: '委托单位', value: headerData.client_unit || entrust.client_unit || '' },
+      { label: '建设单位', value: headerData.build_unit || entrust.build_unit || '' },
+      { label: '施工单位', value: headerData.construction_unit || entrust.construction_unit || '' },
+      { label: '见证单位', value: headerData.supervision_unit || entrust.supervision_unit || '' },
+      { label: '检测项目', value: headerData.test_item || categoryNames[entrust.category_code] || '' },
+      { label: '见证人', value: headerData.witness_person || entrust.witness_person || '' },
+      { label: '样本数量', value: `${totalSamples}点` },
+      { label: '取样日期', value: headerData.sampling_date || '' },
+      { label: '检测日期', value: headerData.test_date || '' },
+      { label: '报告日期', value: headerData.report_date || '' },
+      { label: '路段桩号', value: headerData.section_pile || data.defaultSectionPile, noScale: true },
+      { label: '结构部位', value: headerData.structure_part || extra.structure_layer || [...new Set(items.map(i => i.position_name).filter(Boolean))].join('、'), noScale: true },
+    ];
+    for (const { label, value, noScale } of fields) {
+      xml = fillCellAfter(xml, label, value, noScale);
+    }
+
+    // 检测依据
+    const basisMap = {
+
+      'JTG 3450-2019': '《公路路基路面现场测试规程》（JTG 3450—2019）',
+      'GB/T 50123-2019': '《土工试验方法标准》（GB/T 50123—2019）',
+      'CJJ 1-2008': '《城镇道路工程施工与质量验收规范》（CJJ 1—2008）',
+      'GB 50268-2008': '《给水排水管工程施工及验收规范》（GB 50268—2008）',
+    };
+    const testBasis = headerData.test_basis || extra.test_basis || [];
+    xml = fillCellAfter(xml, '检测依据', testBasis.map(b => basisMap[b] || b).join('\n'), true, 'left');
+
+    // 检测设备
+    const equipment = headerData.test_equipment || {};
+    const sandCylinder = equipment.sand_cylinder || extra.sand_cylinder || '150mm';
+    const dryingOvens = equipment.drying_oven || extra.drying_oven || [];
+    const ovenList = dryingOvens.map(code => `电热鼓风干燥箱（${code}）`).join('、');
+    const equipText = ovenList
+      ? `灌砂筒（${sandCylinder}）（SB143） 电子秤（SB133）${ovenList} 电子秤（SB139）`
+      : `灌砂筒（${sandCylinder}）（SB143） 电子秤（SB133） 电子秤（SB139）`;
+    xml = fillCellAfter(xml, '检测设备', equipText, true, 'left');
+
+    // 检测结论
+    const pageRef = dataPages <= 1 ? '第2页' : `第2-${1 + dataPages}页`;
+    const defaultConclusion = `依据《公路路基路面现场测试规程》（JTG 3450—2019）进行检测，所检测项目结果符合《给水排水管工程施工及验收规范》GB 50268-2008的标准和设计要求。详见报告${pageRef}。`;
+    xml = fillCellAfter(xml, '检测结论', headerData.conclusion || extra.conclusion || defaultConclusion, true, 'left');
+
+    // 备注 — 最大干密度
+    const maxDryDensities = extra.max_dry_densities || {};
+    const mdValue = headerData.max_dry_density || (
+      Object.keys(maxDryDensities).length > 0
+        ? Object.entries(maxDryDensities).filter(([, v]) => v).map(([k, v]) => `${k}：${v} g/cm³`).join('，')
+        : ''
+    );
+    xml = fillCellAfter(xml, '备注', mdValue ? `最大干密度：${mdValue}` : '', true, 'left');
+
+    z.file('word/document.xml', xml);
+    const docxPath = path.join(os.tmpdir(), `report_info_${ts}.docx`);
+    fs.writeFileSync(docxPath, z.generate({ type: 'nodebuffer', compression: 'DEFLATE' }));
+    convertPairs.push({ docx: docxPath, pdf: docxPath.replace(/\.docx$/, '.pdf'), sort: 1 });
+  }
+
+  // ==================== 数据页 DOCX（每页独立生成） ====================
+  update(4, 5, '正在生成数据页...');
+  await yield_();
+  {
+    const positionDesigns = {};
+    for (const item of items) { positionDesigns[item.position_name] = makeItemDesign(item); }
+    const posMaterialMap = {};
+    for (const ci of items) { posMaterialMap[ci.position_name] = ci.material; }
+    const maxDryDensities = extra.max_dry_densities || {};
+
+    for (let i = 0; i < dataPages; i++) {
+      const z = new PizZip(fs.readFileSync(TEMPLATE_DATA));
+      let xml = z.files['word/document.xml'].asText();
+      xml = fixDocxFont(xml);
+
+      // 填写页头（报告编号 + 页码）
+      xml = fillPageHeaderLine(xml, entrustNo, 2 + i, totalReportPages);
+
+      // 填充本页数据
+      const pageRows = rows.slice(i * ROWS_PER_PAGE, (i + 1) * ROWS_PER_PAGE);
+      const baseSeq = i * ROWS_PER_PAGE + 1;
+      xml = fillOneDataTable(xml, pageRows, positionDesigns, maxDryDensities, baseSeq, 0, posMaterialMap);
+
+      z.file('word/document.xml', xml);
+      const docxPath = path.join(os.tmpdir(), `report_data_p${i}_${ts}.docx`);
+      fs.writeFileSync(docxPath, z.generate({ type: 'nodebuffer', compression: 'DEFLATE' }));
+      convertPairs.push({ docx: docxPath, pdf: docxPath.replace(/\.docx$/, '.pdf'), sort: 2 + i });
+    }
+  }
+
+  // ==================== 转换 PDF + 合并 ====================
+  update(5, 5, '正在转换 PDF 并合并...');
+  await yield_();
+
+  await batchDocxToPdf(convertPairs);
+
+  const { PDFDocument: PDFLib } = require('pdf-lib');
+  const merged = await PDFLib.create();
+  convertPairs.sort((a, b) => a.sort - b.sort);
+  for (const pair of convertPairs) {
+    if (fs.existsSync(pair.pdf)) {
+      const src = await PDFLib.load(fs.readFileSync(pair.pdf));
+      const pages = await merged.embedPdf(src);
+      for (let i = 0; i < pages.length; i++) {
+        const page = merged.addPage([pages[i].width, pages[i].height]);
+        page.drawPage(pages[i]);
+      }
+    }
+  }
+
+  const finalPdf = path.join(os.tmpdir(), `report_${entrustNo}_${Date.now().toString(36)}.pdf`);
+  fs.writeFileSync(finalPdf, await merged.save());
+
+  // 清理临时文件
+  for (const pair of convertPairs) {
+    try { fs.unlinkSync(pair.docx); } catch {}
+    try { fs.unlinkSync(pair.pdf); } catch {}
+  }
 
   reportJobs.set(taskId, {
-    step: 4, totalSteps: 4, message: '生成完成，正在下载...',
+    step: 5, totalSteps: 5, message: '生成完成，正在下载...',
     done: true, error: null, pdfPath: finalPdf,
   });
 }
@@ -452,7 +458,8 @@ function fillPageHeaderLine(bodyXml, entrustNo, pageNo, totalPages) {
   if (pOpen === -1 || pClose < '</w:p>'.length) return bodyXml;
 
   const escNo = escXml(entrustNo);
-  const newP = `<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="宋体"/><w:szCs w:val="21"/></w:rPr><w:t xml:space="preserve">报告编号：${escNo}    共 ${totalPages} 页 第 ${pageNo} 页</w:t></w:r></w:p>`;
+  const pad = '　　　　　　　　　　　　　　　　　　　　　';
+  const newP = `<w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="宋体"/><w:szCs w:val="21"/></w:rPr><w:t xml:space="preserve">报告编号：${escNo}${pad}共 ${totalPages} 页 第 ${pageNo} 页</w:t></w:r></w:p>`;
 
   return bodyXml.substring(0, pOpen) + newP + bodyXml.substring(pClose);
 }
@@ -490,7 +497,7 @@ function fillAllDataTables(xml, rows, positionDesigns, maxDryDensities, posMater
   return xml;
 }
 
-// 填充单个数据表（9列：序号|试样编号|取样桩号(vMerge)|取样位置(vMerge,2段)|层位|设计要求|干密度|压实度|单项判定）
+// 填充单个数据表（7列：试样编号|取样桩号(vMerge)|取样位置-部位(vMerge)|取样位置-侧位|设计要求|干密度|压实度|单项判定）
 function fillOneDataTable(xml, pageRows, positionDesigns, maxDryDensities, baseSeq, startFrom, posMaterialMap) {
   const headerIdx = xml.indexOf('试样编号', startFrom);
   if (headerIdx === -1) return xml;
@@ -519,18 +526,17 @@ function fillOneDataTable(xml, pageRows, positionDesigns, maxDryDensities, baseS
   }
   if (headerRowIdx === -1) return xml;
 
-  // 分离数据行（9列单元格），模板无页底行
+  // 分离数据行（8列单元格）
   const templateDataRows = [];
   for (let i = headerRowIdx + 1; i < allTrs.length; i++) {
     const cellCount = (allTrs[i].content.match(/<w:tc\b/g) || []).length;
-    if (cellCount >= 9) {
+    if (cellCount >= 8) {
       templateDataRows.push(allTrs[i]);
     } else {
       break;
     }
   }
 
-  // 构建行数据，按 3 行一组
   // 查找材料对应的最大干密度
   function getMaxDry(material, position) {
     const mat = material || posMaterialMap[position] || '';
@@ -548,13 +554,10 @@ function fillOneDataTable(xml, pageRows, positionDesigns, maxDryDensities, baseS
     let posSide = '';
     if (rawPosition.endsWith('左侧')) { posName = rawPosition.slice(0, -2); posSide = '左侧'; }
     else if (rawPosition.endsWith('右侧')) { posName = rawPosition.slice(0, -2); posSide = '右侧'; }
-    // 精确匹配：只有部位名完全等于"管底"或"管顶"时才推断侧位
-    if (!posSide && posName === '管底') posSide = '底侧';
-    else if (!posSide && posName === '管顶') posSide = '上侧';
 
-    // 干密度直接用存储值（不依赖MDD，存储值可靠）
+    // 干密度直接用存储值
     const dryDensity = tv.dry_density ? parseFloat(tv.dry_density) : 0;
-    // 压实度从原始数据重算（MDD可能已变更，存储值可能过期）
+    // 压实度从原始数据重算（MDD可能已变更）
     const rawDD = dryDensity || calcDryDensity(tv);
     const maxDry = getMaxDry(tv.material || rd.material, rd.position_name);
     const compaction = rawDD > 0 && maxDry > 0 ? parseFloat(bankersRound(rawDD / maxDry * 100, 1)) : 0;
@@ -577,12 +580,10 @@ function fillOneDataTable(xml, pageRows, positionDesigns, maxDryDensities, baseS
     const isGroupFirst = groupIndex === 0;
 
     return {
-      seq: baseSeq + i,
       sample_no: String(baseSeq + i),
       stake_no: (isGroupFirst ? (tv.stake_no || rd.position_name || '') : ''),
       position_name: (isGroupFirst ? posName : ''),
-      side: (isGroupFirst ? posSide : ''),
-      layer: rd.layer || '',
+      side: posSide,
       design_req: posDesign.str,
       dry_density: dryDensity > 0 ? String(dryDensity) : '',
       compaction: compaction > 0 ? String(compaction) : '',
@@ -605,33 +606,7 @@ function fillOneDataTable(xml, pageRows, positionDesigns, maxDryDensities, baseS
     return tcContent.replace('</w:pPr>', '</w:pPr>' + run);
   }
 
-  // 辅助：填充多段文本（每段对应一个 <w:p>）
-  function fillCellMultiText(tcContent, texts) {
-    const pRegex = /<w:p\b([\s\S]*?)<\/w:p>/g;
-    const paragraphs = [];
-    let pm;
-    while ((pm = pRegex.exec(tcContent)) !== null) {
-      paragraphs.push(pm);
-    }
-    if (!paragraphs.length) return tcContent;
-
-    let result = tcContent;
-    for (let pi = paragraphs.length - 1; pi >= 0; pi--) {
-      const oldP = paragraphs[pi][0];
-      const text = texts[pi] || '';
-      let newP = oldP;
-      newP = newP.replace(/<w:r[\s>][\s\S]*?<\/w:r>/g, '');
-      if (text) {
-        const sz = fitFontSize(text);
-        const run = `<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="宋体"/><w:sz w:val="${sz}"/><w:szCs w:val="${sz}"/></w:rPr><w:t xml:space="preserve">${escXml(text)}</w:t></w:r>`;
-        newP = newP.replace('</w:pPr>', '</w:pPr>' + run);
-      }
-      result = result.replace(oldP, newP);
-    }
-    return result;
-  }
-
-  // 列映射: 0=序号 1=试样编号 2=取样桩号(vMerge) 3=取样位置(vMerge,2段) 4=层位 5=设计要求 6=干密度 7=压实度 8=单项判定
+  // 列映射: 0=试样编号 1=取样桩号(vMerge) 2=取样位置-部位(vMerge) 3=取样位置-侧位 4=设计要求 5=干密度 6=压实度 7=单项判定
   function fillDataRow(tr, rd) {
     const tcs = [];
     const tcRegex = /<w:tc\b([^>]*)>([\s\S]*?)<\/w:tc>/g;
@@ -639,35 +614,33 @@ function fillOneDataTable(xml, pageRows, positionDesigns, maxDryDensities, baseS
     while ((tcMatch = tcRegex.exec(tr.content)) !== null) {
       tcs.push({ full: tcMatch[0], openTag: '<w:tc' + tcMatch[1] + '>', content: tcMatch[2] });
     }
-    if (tcs.length < 9) return tr.full;
+    if (tcs.length < 8) return tr.full;
 
     let newRow = tr.content;
-    // col 0: 序号
-    newRow = newRow.replace(tcs[0].full, tcs[0].openTag + fillCellText(tcs[0].content, String(rd.seq)) + '</w:tc>');
-    // col 1: 试样编号
-    newRow = newRow.replace(tcs[1].full, tcs[1].openTag + fillCellText(tcs[1].content, rd.sample_no) + '</w:tc>');
-    // col 2: 取样桩号 (vMerge — 仅首行有内容)
+    // col 0: 试样编号
+    newRow = newRow.replace(tcs[0].full, tcs[0].openTag + fillCellText(tcs[0].content, rd.sample_no) + '</w:tc>');
+    // col 1: 取样桩号 (vMerge — 仅首行有内容)
     if (rd.isGroupFirst) {
-      newRow = newRow.replace(tcs[2].full, tcs[2].openTag + fillCellText(tcs[2].content, rd.stake_no) + '</w:tc>');
+      newRow = newRow.replace(tcs[1].full, tcs[1].openTag + fillCellText(tcs[1].content, rd.stake_no) + '</w:tc>');
+    } else {
+      newRow = newRow.replace(tcs[1].full, tcs[1].openTag + fillCellText(tcs[1].content, '') + '</w:tc>');
+    }
+    // col 2: 取样位置-部位 (vMerge — 仅首行有内容)
+    if (rd.isGroupFirst) {
+      newRow = newRow.replace(tcs[2].full, tcs[2].openTag + fillCellText(tcs[2].content, rd.position_name) + '</w:tc>');
     } else {
       newRow = newRow.replace(tcs[2].full, tcs[2].openTag + fillCellText(tcs[2].content, '') + '</w:tc>');
     }
-    // col 3: 取样位置 (vMerge, 2段 — 仅首行有内容)
-    if (rd.isGroupFirst) {
-      newRow = newRow.replace(tcs[3].full, tcs[3].openTag + fillCellMultiText(tcs[3].content, [rd.position_name, rd.side]) + '</w:tc>');
-    } else {
-      newRow = newRow.replace(tcs[3].full, tcs[3].openTag + fillCellText(tcs[3].content, '') + '</w:tc>');
-    }
-    // col 4: 层位
-    newRow = newRow.replace(tcs[4].full, tcs[4].openTag + fillCellText(tcs[4].content, rd.layer) + '</w:tc>');
-    // col 5: 设计要求
-    newRow = newRow.replace(tcs[5].full, tcs[5].openTag + fillCellText(tcs[5].content, rd.design_req) + '</w:tc>');
-    // col 6: 干密度
-    newRow = newRow.replace(tcs[6].full, tcs[6].openTag + fillCellText(tcs[6].content, rd.dry_density) + '</w:tc>');
-    // col 7: 压实度
-    newRow = newRow.replace(tcs[7].full, tcs[7].openTag + fillCellText(tcs[7].content, rd.compaction) + '</w:tc>');
-    // col 8: 单项判定
-    newRow = newRow.replace(tcs[8].full, tcs[8].openTag + fillCellText(tcs[8].content, rd.judgment) + '</w:tc>');
+    // col 3: 取样位置-侧位 (每行独立)
+    newRow = newRow.replace(tcs[3].full, tcs[3].openTag + fillCellText(tcs[3].content, rd.side) + '</w:tc>');
+    // col 4: 设计要求
+    newRow = newRow.replace(tcs[4].full, tcs[4].openTag + fillCellText(tcs[4].content, rd.design_req) + '</w:tc>');
+    // col 5: 干密度
+    newRow = newRow.replace(tcs[5].full, tcs[5].openTag + fillCellText(tcs[5].content, rd.dry_density) + '</w:tc>');
+    // col 6: 压实度
+    newRow = newRow.replace(tcs[6].full, tcs[6].openTag + fillCellText(tcs[6].content, rd.compaction) + '</w:tc>');
+    // col 7: 单项判定
+    newRow = newRow.replace(tcs[7].full, tcs[7].openTag + fillCellText(tcs[7].content, rd.judgment) + '</w:tc>');
 
     return newRow;
   }
@@ -678,22 +651,50 @@ function fillOneDataTable(xml, pageRows, positionDesigns, maxDryDensities, baseS
     tableXml = tableXml.replace(templateDataRows[i].full, '<w:tr' + templateDataRows[i].attrs + '>' + newRow + '</w:tr>');
   }
 
-  // 清除多余空行
-  for (let i = rowData.length; i < templateDataRows.length; i++) {
-    const tr = templateDataRows[i];
-    const tcs = [];
-    const tcRegex = /<w:tc\b([^>]*)>([\s\S]*?)<\/w:tc>/g;
-    let tcMatch;
-    while ((tcMatch = tcRegex.exec(tr.content)) !== null) {
-      tcs.push({ full: tcMatch[0], openTag: '<w:tc' + tcMatch[1] + '>', content: tcMatch[2] });
+  // "以下空白" — 当本页数据不足 18 行时
+  if (rowData.length < templateDataRows.length) {
+    const blankRowIdx = rowData.length;
+    if (blankRowIdx < templateDataRows.length) {
+      const tr = templateDataRows[blankRowIdx];
+      const tcs = [];
+      const tcRegex = /<w:tc\b([^>]*)>([\s\S]*?)<\/w:tc>/g;
+      let tcMatch;
+      while ((tcMatch = tcRegex.exec(tr.content)) !== null) {
+        tcs.push({ full: tcMatch[0], openTag: '<w:tc' + tcMatch[1] + '>', content: tcMatch[2] });
+      }
+      if (tcs.length >= 8) {
+        let newRow = tr.content;
+        // 清空前3列（编号、桩号、部位）
+        newRow = newRow.replace(tcs[0].full, tcs[0].openTag + fillCellText(tcs[0].content, '') + '</w:tc>');
+        newRow = newRow.replace(tcs[1].full, tcs[1].openTag + fillCellText(tcs[1].content, '') + '</w:tc>');
+        newRow = newRow.replace(tcs[2].full, tcs[2].openTag + fillCellText(tcs[2].content, '') + '</w:tc>');
+        // "以下空白" 填入 侧位/设计/干密度/压实度 四列
+        newRow = newRow.replace(tcs[3].full, tcs[3].openTag + fillCellText(tcs[3].content, '以') + '</w:tc>');
+        newRow = newRow.replace(tcs[4].full, tcs[4].openTag + fillCellText(tcs[4].content, '下') + '</w:tc>');
+        newRow = newRow.replace(tcs[5].full, tcs[5].openTag + fillCellText(tcs[5].content, '空') + '</w:tc>');
+        newRow = newRow.replace(tcs[6].full, tcs[6].openTag + fillCellText(tcs[6].content, '白') + '</w:tc>');
+        newRow = newRow.replace(tcs[7].full, tcs[7].openTag + fillCellText(tcs[7].content, '') + '</w:tc>');
+        tableXml = tableXml.replace(tr.full, '<w:tr' + tr.attrs + '>' + newRow + '</w:tr>');
+      }
     }
-    if (tcs.length < 9) continue;
-    let newRow = tr.content;
-    for (let c = 0; c < tcs.length; c++) {
-      let tcContent = tcs[c].content.replace(/<w:r[\s>][\s\S]*?<\/w:r>/g, '');
-      newRow = newRow.replace(tcs[c].full, tcs[c].openTag + tcContent + '</w:tc>');
+
+    // 剩余空行清空
+    for (let i = rowData.length + 1; i < templateDataRows.length; i++) {
+      const tr = templateDataRows[i];
+      const tcs = [];
+      const tcRegex = /<w:tc\b([^>]*)>([\s\S]*?)<\/w:tc>/g;
+      let tcMatch;
+      while ((tcMatch = tcRegex.exec(tr.content)) !== null) {
+        tcs.push({ full: tcMatch[0], openTag: '<w:tc' + tcMatch[1] + '>', content: tcMatch[2] });
+      }
+      if (tcs.length < 8) continue;
+      let newRow = tr.content;
+      for (let c = 0; c < tcs.length; c++) {
+        let tcContent = tcs[c].content.replace(/<w:r[\s>][\s\S]*?<\/w:r>/g, '');
+        newRow = newRow.replace(tcs[c].full, tcs[c].openTag + tcContent + '</w:tc>');
+      }
+      tableXml = tableXml.replace(tr.full, '<w:tr' + tr.attrs + '>' + newRow + '</w:tr>');
     }
-    tableXml = tableXml.replace(tr.full, '<w:tr' + tr.attrs + '>' + newRow + '</w:tr>');
   }
 
   xml = xml.substring(0, tableStart) + tableXml + xml.substring(tableEnd);
@@ -753,6 +754,28 @@ exports.saveReportData = async (req, res) => {
 
       db.prepare('UPDATE biz_original_record SET remark = ? WHERE id = ?')
         .run(JSON.stringify(remark), firstRecord.id);
+    }
+
+    // 保存数据行编辑（桩号、取样位置、侧位）
+    if (body.data_rows && Array.isArray(body.data_rows)) {
+      const updateStmt = db.prepare('UPDATE biz_original_record_item SET test_values = ? WHERE id = ?');
+      db.transaction(() => {
+        for (const dr of body.data_rows) {
+          if (!dr.id) continue;
+          const [existing] = db.prepare('SELECT test_values FROM biz_original_record_item WHERE id = ?').all(dr.id);
+          if (!existing) continue;
+          let tv = {};
+          try { tv = typeof existing.test_values === 'string' ? JSON.parse(existing.test_values) : (existing.test_values || {}); } catch {}
+          if (dr.stake_no !== undefined) tv.stake_no = dr.stake_no;
+          if (dr.position_name || dr.position_side) {
+            const oldPos = tv.position || '';
+            const name = dr.position_name || oldPos.replace(/(左侧|右侧)$/, '');
+            const side = dr.position_side !== undefined ? dr.position_side : (oldPos.match(/(左侧|右侧)$/) || [''])[0];
+            tv.position = name + side;
+          }
+          updateStmt.run(JSON.stringify(tv), dr.id);
+        }
+      })();
     }
 
     res.json({ code: 200, data: { message: '保存成功' } });
@@ -837,13 +860,11 @@ exports.getReportData = async (req, res) => {
           const maxDry = getMaxDry(tv.material || r.material, r.position_name);
           const comp = rawDD > 0 && maxDry > 0 ? parseFloat(bankersRound(rawDD / maxDry * 100, 1)) : 0;
 
-          // 解析侧位
+          // 解析侧位（仅"左侧"/"右侧"精确匹配，不再猜测"底侧"/"上侧"）
           let posName = rawPosition;
           let posSide = '';
           if (rawPosition.endsWith('左侧')) { posName = rawPosition.slice(0, -2); posSide = '左侧'; }
           else if (rawPosition.endsWith('右侧')) { posName = rawPosition.slice(0, -2); posSide = '右侧'; }
-          if (!posSide && posName === '管底') posSide = '底侧';
-          else if (!posSide && posName === '管顶') posSide = '上侧';
 
           // 按部位取设计要求
           const posKey = r.position_name || '';
@@ -860,6 +881,7 @@ exports.getReportData = async (req, res) => {
           }
 
           return {
+            id: r.id,
             seq_no: r.seq_no,
             sample_no: r.sample_no,
             stake_no: tv.stake_no || r.position_name || '',
@@ -867,8 +889,8 @@ exports.getReportData = async (req, res) => {
             position_side: posSide,
             material: tv.material || '',
             design_requirement: pd.str,
-            dry_density: dryDensity > 0 ? String(dryDensity) : '',
-            compaction: comp > 0 ? String(comp) : '',
+            dry_density: dryDensity > 0 ? parseFloat(dryDensity).toFixed(2) : '',
+            compaction: comp > 0 ? parseFloat(comp).toFixed(1) : '',
             judgment,
           };
         }),

@@ -8,7 +8,6 @@
     <el-card shadow="never">
       <template #header><strong>白搪瓷盒</strong></template>
       <el-table :data="boxes" border stripe size="small">
-        <el-table-column type="index" label="#" width="50" />
         <el-table-column prop="code" label="编号" width="80" />
         <el-table-column label="质量(g)" width="120">
           <template #default="{ row }">
