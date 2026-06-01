@@ -1,10 +1,22 @@
 <template>
   <div class="page-container">
     <div class="page-header">
-      <h3>报告打印</h3>
+      <h3>
+        <template v-if="route.params.entrustNo">
+          <el-button link type="primary" @click="$router.push('/print')">
+            <el-icon style="margin-right:4px"><ArrowLeft /></el-icon>
+            返回列表
+          </el-button>
+          <span style="margin-left:8px;color:#909399">报告打印 — {{ selectedEntrustNo }}</span>
+        </template>
+        <template v-else>
+          报告打印
+        </template>
+      </h3>
     </div>
 
-    <!-- 委托选择 -->
+    <!-- 委托选择列表（仅从侧边栏进入时显示） -->
+    <template v-if="!route.params.entrustNo">
     <el-card shadow="never" class="search-card">
       <el-form :inline="true">
         <el-form-item label="检测类别">
@@ -36,6 +48,7 @@
         <el-table-column prop="entrust_type" label="委托类型" width="130" />
         <el-table-column prop="project_name" label="工程名称" min-width="180" show-overflow-tooltip />
         <el-table-column prop="entrust_date" label="委托日期" width="120" />
+        <el-table-column prop="report_date" label="报告日期" width="120" />
         <el-table-column label="操作" width="120" fixed="right">
           <template #default="{ row }">
             <el-button type="primary" link @click.stop="handleSelect(row)">选择</el-button>
@@ -51,16 +64,17 @@
         />
       </div>
     </el-card>
+    </template>
 
-    <!-- 非管道压实度提示 -->
-    <template v-if="selected && !isPipe">
+    <!-- 不支持的类别提示 -->
+    <template v-if="selected && !isPipe && !isRoad">
       <el-card shadow="never" class="form-card">
-        <el-empty description="当前仅支持管道压实度报告，其他类别暂未开放" />
+        <el-empty description="当前仅支持管道压实度和路基压实度报告，其他类别暂未开放" />
       </el-card>
     </template>
 
-    <!-- ===== 三段式报告表单（仅管道压实度） ===== -->
-    <template v-if="selected && isPipe">
+    <!-- ===== 三段式报告表单（管道 / 道路） ===== -->
+    <template v-if="selected && (isPipe || isRoad)">
       <!-- 第一段：封面页 -->
       <el-card shadow="never" class="report-card cover-card">
         <div class="card-title-bar">封面 — 检测报告封面页</div>
@@ -83,7 +97,7 @@
             </div>
             <div class="cover-field">
               <span class="cover-label">检测项目：</span>
-              <span class="cover-value">{{ form.test_item || '—' }}</span>
+              <el-input v-model="form.test_item" class="cover-input" />
             </div>
             <div class="cover-field">
               <span class="cover-label">报告日期：</span>
@@ -113,7 +127,7 @@
             <div class="info-label">工程名称</div>
             <div class="info-value"><el-input v-model="form.project_name" /></div>
             <div class="info-label">检测类别</div>
-            <div class="info-value"><el-input v-model="form.entrust_type" /></div>
+            <div class="info-value"><el-input v-model="form.test_type" /></div>
           </div>
           <!-- Row 2: 委托单位 | 建设单位 -->
           <div class="info-row">
@@ -240,11 +254,12 @@
       <!-- 第三段：数据预览 -->
       <el-card shadow="never" class="report-card data-card">
         <div class="card-title-bar">
-          数据详情 — 检测报告管道详情数据页
+          数据详情 — 检测报告{{ isRoad ? '道路' : '管道' }}详情数据页
           <span class="page-badge">报告编号：{{ form.report_no }}&emsp;共 {{ totalReportPages }} 页 第 2 页起</span>
         </div>
 
-        <el-table :data="dataRows" border stripe size="small" class="data-preview-table"
+        <!-- 管道数据表：7列含侧位，每3行合并 -->
+        <el-table v-if="isPipe" :data="dataRows" border stripe size="small" class="data-preview-table"
           :span-method="spanMethod">
           <el-table-column label="试样编号" width="65" align="center">
             <template #default="{ $index }">{{ $index + 1 }}</template>
@@ -262,6 +277,52 @@
           <el-table-column label="侧位" width="70" align="center">
             <template #default="{ row }">
               <el-input v-model="row.position_side" size="small" class="table-edit-input" />
+            </template>
+          </el-table-column>
+          <el-table-column label="设计要求(%)" width="105" align="center">
+            <template #default="{ row }">
+              <span class="readonly-cell">{{ row.design_requirement || designReqStr }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="干密度(g/cm³)" width="105" align="center">
+            <template #default="{ row }">
+              <span :class="{ 'empty-cell': !row.dry_density }">{{ row.dry_density || '—' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="压实度(%)" width="85" align="center">
+            <template #default="{ row }">
+              <span class="compaction-val" v-if="row.compaction">{{ row.compaction }}</span>
+              <span class="empty-cell" v-else>—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="单项判定" width="110" align="center">
+            <template #default="{ row }">
+              <el-tag v-if="row.judgment" :type="row.judgment === '符合设计要求' ? 'success' : 'danger'" size="small">
+                {{ row.judgment }}
+              </el-tag>
+              <span class="empty-cell" v-else>—</span>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <!-- 道路数据表：8列含最大干密度，无合并 -->
+        <el-table v-if="isRoad" :data="dataRows" border stripe size="small" class="data-preview-table">
+          <el-table-column label="试样编号" width="65" align="center">
+            <template #default="{ $index }">{{ $index + 1 }}</template>
+          </el-table-column>
+          <el-table-column label="取样桩号" width="110" align="center">
+            <template #default="{ row }">
+              <el-input v-model="row.stake_no" size="small" class="table-edit-input" />
+            </template>
+          </el-table-column>
+          <el-table-column label="取样位置" width="130" align="center">
+            <template #default="{ row }">
+              <el-input v-model="row.position_name" size="small" class="table-edit-input" />
+            </template>
+          </el-table-column>
+          <el-table-column label="最大干密度(g/cm³)" width="115" align="center">
+            <template #default="{ row }">
+              <span :class="{ 'empty-cell': !row.max_dry_density }">{{ row.max_dry_density || '—' }}</span>
             </template>
           </el-table-column>
           <el-table-column label="设计要求(%)" width="105" align="center">
@@ -326,6 +387,7 @@
 
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { getEntrustList } from '../../api/entrust'
 import { getReportData, saveReportData, startReportPrint, getReportPrintStatus, downloadReportPrint } from '../../api/report'
 
@@ -341,10 +403,14 @@ const isPipe = computed(() => {
   const row = tableData.value.find(r => r.id === selectedEntrustId.value)
   return row?.entrust_type === '管道压实度'
 })
+const isRoad = computed(() => {
+  const row = tableData.value.find(r => r.id === selectedEntrustId.value)
+  return row?.entrust_type === '路基压实度'
+})
 
 const form = reactive({
   report_no: '', project_name: '', client_unit: '', test_item: '', report_date: '',
-  entrust_type: '', build_unit: '', construction_unit: '', supervision_unit: '',
+  entrust_type: '', test_type: '', build_unit: '', construction_unit: '', supervision_unit: '',
   witness_person: '', total_samples: 0, sampling_date: '', test_date: '',
   section_pile: '', structure_part: '',
   test_basis: [], test_equipment: { sand_cylinder: '150mm', drying_oven: [] },
@@ -412,7 +478,22 @@ function tableRowClass({ row }) {
   return row.id === selectedEntrustId.value ? 'current-row' : ''
 }
 
-onMounted(() => fetchData())
+const route = useRoute()
+const router = useRouter()
+
+onMounted(async () => {
+  await fetchData()
+  autoSelectFromRoute()
+})
+
+// 监听路由参数变化（同组件内从 /print 跳转到 /print/:entrustNo）
+watch(() => route.params.entrustNo, (newVal) => {
+  if (newVal) {
+    autoSelectFromRoute()
+  } else {
+    handleClear()
+  }
+})
 onBeforeUnmount(() => { if (printPollTimer) clearInterval(printPollTimer); if (autoSaveTimer) clearTimeout(autoSaveTimer) })
 
 // 自动保存
@@ -424,6 +505,16 @@ watch(form, () => { if (autoSaveReady) debouncedAutoSave() }, { deep: true })
 function debouncedAutoSave() {
   if (autoSaveTimer) clearTimeout(autoSaveTimer)
   autoSaveTimer = setTimeout(() => handleSave(), 2000)
+}
+
+// 从路由参数自动选择委托
+function autoSelectFromRoute() {
+  const entrustNo = route.params.entrustNo
+  if (!entrustNo) return
+  const row = tableData.value.find(r => r.entrust_no === entrustNo)
+  if (row) {
+    handleSelect(row)
+  }
 }
 
 function handleFilter() {
@@ -445,11 +536,18 @@ async function fetchData() {
 }
 
 async function handleSelect(row) {
+  // 列表模式：跳转到详情页
+  if (!route.params.entrustNo) {
+    router.push(`/print/${row.entrust_no}`)
+    return
+  }
+
   autoSaveReady = false
   selectedEntrustId.value = row.id
   selectedEntrustNo.value = row.entrust_no
 
-  if (row.entrust_type !== '管道压实度') {
+  // 仅管道和道路压实度支持报告，其他类别跳过数据加载
+  if (row.entrust_type !== '管道压实度' && row.entrust_type !== '路基压实度') {
     selected.value = true
     return
   }
@@ -465,6 +563,7 @@ async function handleSelect(row) {
     form.report_date = d.cover.report_date || ''
 
     form.entrust_type = d.info.entrust_type
+    form.test_type = d.info.test_type || ''
     form.build_unit = d.info.build_unit
     form.construction_unit = d.info.construction_unit
     form.supervision_unit = d.info.supervision_unit
@@ -502,6 +601,10 @@ function handleClear() {
   selectedEntrustNo.value = ''
   dataRows.value = []
   samplingDateRange.value = null
+  // 如果是从详情页取消，返回列表
+  if (route.params.entrustNo) {
+    router.push('/print')
+  }
 }
 
 async function handleSave() {
@@ -510,8 +613,10 @@ async function handleSave() {
     const payload = {
       project_name: form.project_name,
       client_unit: form.client_unit,
+      test_item: form.test_item,
       report_date: form.report_date,
       entrust_type: form.entrust_type,
+      test_type: form.test_type,
       build_unit: form.build_unit,
       construction_unit: form.construction_unit,
       supervision_unit: form.supervision_unit,
@@ -561,6 +666,7 @@ async function handleInit() {
     form.test_item = d.cover.test_item
     form.report_date = d.cover.report_date || ''
     form.entrust_type = d.info.entrust_type
+    form.test_type = d.info.test_type || ''
     form.build_unit = d.info.build_unit
     form.construction_unit = d.info.construction_unit
     form.supervision_unit = d.info.supervision_unit
@@ -603,6 +709,7 @@ async function handlePrint() {
     test_item: form.test_item,
     report_date: form.report_date,
     entrust_type: form.entrust_type,
+    test_type: form.test_type,
     build_unit: form.build_unit,
     construction_unit: form.construction_unit,
     supervision_unit: form.supervision_unit,

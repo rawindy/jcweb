@@ -3,13 +3,13 @@ const { generateProjectNo } = require('../utils/codeGenerator');
 
 exports.list = async (req, res) => {
   try {
-    const { page = 1, pageSize = 20, field, keyword } = req.query;
+    const { page = 1, pageSize = 20, field, keyword, sortField, sortOrder } = req.query;
     const offset = (page - 1) * pageSize;
 
     let where = 'WHERE status = 1';
     const params = [];
 
-    const allowedFields = ['project_no', 'project_name', 'client_unit', 'client_person', 'supervision_unit', 'witness_person', 'construction_unit', 'build_unit'];
+    const allowedFields = ['project_no', 'project_name', 'client_unit', 'client_person', 'supervision_unit', 'witness_person', 'construction_unit', 'build_unit', 'create_time'];
     if (keyword && field && allowedFields.includes(field)) {
       where += ` AND ${field} LIKE ?`;
       params.push(`%${keyword}%`);
@@ -19,11 +19,18 @@ exports.list = async (req, res) => {
       params.push(kw, kw, kw, kw, kw, kw, kw, kw);
     }
 
+    // 排序：默认按编号降序，支持前端传入的排序字段
+    let orderBy = 'ORDER BY project_no DESC';
+    if (sortField && allowedFields.includes(sortField)) {
+      const dir = sortOrder === 'descending' ? 'DESC' : 'ASC';
+      orderBy = `ORDER BY ${sortField} ${dir}`;
+    }
+
     const [countResult] = query(`SELECT COUNT(*) AS total FROM biz_project ${where}`, params);
     const total = countResult[0].total;
 
     const [rows] = query(
-      `SELECT * FROM biz_project ${where} ORDER BY id DESC LIMIT ? OFFSET ?`,
+      `SELECT * FROM biz_project ${where} ${orderBy} LIMIT ? OFFSET ?`,
       [...params, parseInt(pageSize), offset]
     );
 
@@ -36,12 +43,12 @@ exports.list = async (req, res) => {
 
 exports.create = async (req, res) => {
   try {
-    const { project_name, client_unit, client_person, supervision_unit, witness_person, construction_unit, build_unit, remark } = req.body;
+    const { project_name, client_unit, client_person, supervision_unit, witness_person, construction_unit, build_unit, remark, test_type } = req.body;
     const project_no = generateProjectNo();
     const [result] = query(
-      `INSERT INTO biz_project (project_no, project_name, client_unit, client_person, supervision_unit, witness_person, construction_unit, build_unit, remark, create_time, update_time)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'), datetime('now','localtime'))`,
-      [project_no, project_name, client_unit, client_person, supervision_unit, witness_person, construction_unit, build_unit, remark || null]
+      `INSERT INTO biz_project (project_no, project_name, client_unit, client_person, supervision_unit, witness_person, construction_unit, build_unit, remark, test_type, create_time, update_time)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'), datetime('now','localtime'))`,
+      [project_no, project_name, client_unit, client_person, supervision_unit, witness_person, construction_unit, build_unit, remark || null, test_type || null]
     );
     res.json({ code: 200, data: { id: result.insertId, project_no }, message: '创建成功' });
   } catch (err) {
@@ -53,11 +60,11 @@ exports.create = async (req, res) => {
 exports.update = async (req, res) => {
   try {
     const { id } = req.params;
-    const { project_no, project_name, client_unit, client_person, supervision_unit, witness_person, construction_unit, build_unit, remark } = req.body;
+    const { project_no, project_name, client_unit, client_person, supervision_unit, witness_person, construction_unit, build_unit, remark, test_type } = req.body;
     query(
-      `UPDATE biz_project SET project_no=?, project_name=?, client_unit=?, client_person=?, supervision_unit=?, witness_person=?, construction_unit=?, build_unit=?, remark=?, update_time=datetime('now','localtime')
+      `UPDATE biz_project SET project_no=?, project_name=?, client_unit=?, client_person=?, supervision_unit=?, witness_person=?, construction_unit=?, build_unit=?, remark=?, test_type=?, update_time=datetime('now','localtime')
        WHERE id=?`,
-      [project_no, project_name, client_unit, client_person, supervision_unit, witness_person, construction_unit, build_unit, remark || null, id]
+      [project_no, project_name, client_unit, client_person, supervision_unit, witness_person, construction_unit, build_unit, remark || null, test_type || null, id]
     );
     res.json({ code: 200, message: '更新成功' });
   } catch (err) {

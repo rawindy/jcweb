@@ -78,10 +78,11 @@
         </el-table-column>
         <el-table-column prop="entrust_date" label="委托日期" width="120" />
         <el-table-column prop="create_time" label="创建时间" width="160" />
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="280" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="$router.push(`/entrust/${row.id}`)">详情</el-button>
             <el-button link type="primary" @click="$router.push(`/record/${row.entrust_no}`)">录入记录</el-button>
+            <el-button link type="primary" @click="$router.push(`/print/${row.entrust_no}`)">打印报告</el-button>
             <el-button link type="danger" @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>

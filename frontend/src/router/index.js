@@ -59,6 +59,12 @@ const routes = [
         name: 'ReportPrint',
         component: () => import('../views/print/Index.vue'),
         meta: { title: '报告打印' }
+      },
+      {
+        path: 'print/:entrustNo',
+        name: 'ReportPrintByEntrust',
+        component: () => import('../views/print/Index.vue'),
+        meta: { title: '报告打印' }
       }
     ]
   }

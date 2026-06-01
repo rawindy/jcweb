@@ -39,66 +39,69 @@
       <!-- 抬头信息 -->
       <el-card shadow="never" class="section-card">
         <template #header><span class="card-title">记录单抬头</span></template>
-        <el-row :gutter="20" class="info-line">
-          <el-col :span="8">
-            <span class="lbl">委托编号：</span><span class="val">{{ recordData.entrust.entrust_no }}</span>
-          </el-col>
-          <el-col :span="8">
-            <span class="lbl">记录单编号：</span><span class="val">JL/{{ recordData.entrust.entrust_no }}</span>
-          </el-col>
-          <el-col :span="8">
-            <span class="lbl">委托日期：</span><span class="val">{{ recordData.entrust.entrust_date }}</span>
-          </el-col>
-        </el-row>
-        <el-row :gutter="20" class="info-line">
-          <el-col :span="12">
-            <span class="lbl">工程名称：</span><span class="val">{{ header.project_name }}</span>
-          </el-col>
-          <el-col :span="12">
-            <span class="lbl">委托单位：</span><span class="val">{{ header.client_unit }}</span>
-          </el-col>
-        </el-row>
-        <!-- 管道压实度专用行 -->
-        <el-row :gutter="20" class="info-line" v-if="isPipeline">
-          <el-col :span="10">
-            <span class="lbl">见证单位：</span><span class="val">{{ header.supervision_unit }}</span>
-          </el-col>
-          <el-col :span="14">
-            <span class="lbl">结构材料：</span>
-            <el-input v-model="extra.structure_layer" size="small" style="width:300px" />
-          </el-col>
-        </el-row>
-        <el-row :gutter="20" class="info-line" v-if="isPipeline">
-          <el-col :span="24">
-            <span class="lbl">最大干密度：</span>
-            <span v-for="mat in uniqueMaterials" :key="mat" style="margin-right:16px">
-              {{ mat }}
-              <el-input v-model="extra.max_dry_densities[mat]" size="small" style="width:90px" placeholder="2.11" />
-              <span style="font-size:12px">g/cm³</span>
-            </span>
-          </el-col>
-        </el-row>
-        <!-- 路基压实度专用行 -->
-        <el-row :gutter="20" class="info-line" v-if="!isPipeline">
-          <el-col :span="10">
-            <span class="lbl">见证单位：</span><span class="val">{{ header.supervision_unit }}</span>
-          </el-col>
-          <el-col :span="7">
-            <span class="lbl">结构层次：</span>
-            <el-input v-model="extra.structure_layer" size="small" style="width:260px" />
-          </el-col>
-          <el-col :span="7">
-            <span class="lbl">最大干密度：</span>
-            <el-input v-model="maxDryDensityValue" size="small" style="width:90px" />
-            <span style="font-size:12px"> g/cm³</span>
-          </el-col>
-        </el-row>
-        <el-row :gutter="20" class="info-line">
-          <el-col :span="24">
-            <span class="lbl">设计要求：</span>
-            <el-input v-model="extra.design_req" size="small" style="width:500px" />
-          </el-col>
-        </el-row>
+        <div class="header-table">
+          <!-- 第1行：基础信息 -->
+          <div class="ht-row cols-3">
+            <div class="ht-cell">
+              <span class="ht-lbl">委托编号</span>
+              <span class="ht-val">{{ recordData.entrust.entrust_no }}</span>
+            </div>
+            <div class="ht-cell">
+              <span class="ht-lbl">记录单编号</span>
+              <span class="ht-val">JL/{{ recordData.entrust.entrust_no }}</span>
+            </div>
+            <div class="ht-cell">
+              <span class="ht-lbl">委托日期</span>
+              <span class="ht-val">{{ recordData.entrust.entrust_date }}</span>
+            </div>
+          </div>
+          <!-- 第2行：工程名称（独占一行） -->
+          <div class="ht-row cols-1">
+            <div class="ht-cell">
+              <span class="ht-lbl">工程名称</span>
+              <span class="ht-val">{{ header.project_name }}</span>
+            </div>
+          </div>
+          <!-- 第3行：委托单位 + 见证单位 -->
+          <div class="ht-row cols-2">
+            <div class="ht-cell">
+              <span class="ht-lbl">委托单位</span>
+              <span class="ht-val">{{ header.client_unit }}</span>
+            </div>
+            <div class="ht-cell">
+              <span class="ht-lbl">见证单位</span>
+              <span class="ht-val">{{ header.supervision_unit }}</span>
+            </div>
+          </div>
+          <!-- 第4行：结构 + 最大干密度 -->
+          <div class="ht-row cols-2">
+            <div class="ht-cell">
+              <span class="ht-lbl">{{ isPipeline ? '结构材料' : '结构层次' }}</span>
+              <el-input v-model="extra.structure_layer" size="small" style="flex:1" />
+            </div>
+            <div class="ht-cell">
+              <span class="ht-lbl">最大干密度</span>
+              <template v-if="isPipeline">
+                <span v-for="mat in uniqueMaterials" :key="mat" style="margin-right:12px;white-space:nowrap">
+                  {{ mat }}
+                  <el-input v-model="extra.max_dry_densities[mat]" size="small" style="width:80px" placeholder="2.11" />
+                  <span style="font-size:12px">g/cm³</span>
+                </span>
+              </template>
+              <template v-else>
+                <el-input v-model="maxDryDensityValue" size="small" style="width:80px" placeholder="2.11" />
+                <span style="font-size:12px"> g/cm³</span>
+              </template>
+            </div>
+          </div>
+          <!-- 第5行：设计要求（独占一行） -->
+          <div class="ht-row cols-1">
+            <div class="ht-cell">
+              <span class="ht-lbl">设计要求</span>
+              <el-input v-model="extra.design_req" size="small" style="flex:1;max-width:600px" />
+            </div>
+          </div>
+        </div>
       </el-card>
 
       <!-- 页码选择 -->
@@ -1354,10 +1357,42 @@ onBeforeUnmount(() => {
 .section-card { margin-bottom: var(--spacing-md); }
 .card-title { font-weight: 600; font-size: 14px; }
 
-/* 抬头信息 */
-.info-line { margin-bottom: 8px; font-size: 14px; }
-.lbl { color: var(--color-text-regular); }
-.val { color: var(--color-text-primary); font-weight: 500; }
+/* 抬头信息 — 表格网格 */
+.header-table {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.ht-row {
+  display: grid;
+  border-bottom: 1px solid var(--color-border-light, #ebeef5);
+}
+.ht-row:last-child { border-bottom: none; }
+.ht-row.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+.ht-row.cols-2 { grid-template-columns: 1fr 1fr; }
+.ht-row.cols-1 { grid-template-columns: 1fr; }
+.ht-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-right: 1px solid var(--color-border-light, #ebeef5);
+  min-height: 36px;
+  font-size: 14px;
+}
+.ht-cell:last-child { border-right: none; }
+.ht-lbl {
+  color: var(--color-text-secondary, #909399);
+  white-space: nowrap;
+  font-weight: 500;
+  min-width: fit-content;
+}
+.ht-lbl::after { content: '：'; }
+.ht-val {
+  color: var(--color-text-primary);
+  font-weight: 500;
+  word-break: break-all;
+}
 
 /* 页签 */
 .page-tabs { display: flex; align-items: center; gap: 12px; }

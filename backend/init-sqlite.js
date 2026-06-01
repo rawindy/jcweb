@@ -131,6 +131,7 @@ CREATE TABLE IF NOT EXISTS biz_project (
   witness_person      TEXT DEFAULT NULL,
   construction_unit   TEXT DEFAULT NULL,
   build_unit          TEXT DEFAULT NULL,
+  test_type           TEXT DEFAULT NULL,
   status              INTEGER NOT NULL DEFAULT 1,
   create_by           TEXT DEFAULT NULL,
   create_time         TEXT NOT NULL DEFAULT (datetime('now','localtime')),

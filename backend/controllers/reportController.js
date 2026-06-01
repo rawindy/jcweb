@@ -100,7 +100,7 @@ async function fetchReportData(entrustId) {
   // 委托 + 工程
   const entrust = db.prepare(`
     SELECT e.*, p.project_no, p.project_name, p.client_unit, p.client_person,
-           p.supervision_unit, p.witness_person, p.construction_unit, p.build_unit
+           p.supervision_unit, p.witness_person, p.construction_unit, p.build_unit, p.test_type
     FROM biz_entrust e LEFT JOIN biz_project p ON e.project_id = p.id
     WHERE e.id = ?
   `).get(entrustId);
@@ -168,7 +168,9 @@ const TEMPLATE_DIR = path.join(__dirname, '..', '..', 'temp');
 const TEMPLATE_COVER = path.join(TEMPLATE_DIR, '检测报告封面页.docx');
 const TEMPLATE_INFO = path.join(TEMPLATE_DIR, '检测报告信息页.docx');
 const TEMPLATE_DATA = path.join(TEMPLATE_DIR, '检测报告管道详情数据页 .docx');
+const TEMPLATE_DATA_ROAD = path.join(TEMPLATE_DIR, '检测报告道路详情数据页.docx');
 const ROWS_PER_PAGE = 18;
+const ROWS_PER_PAGE_ROAD = 18;
 
 // 从封面 body 中提取底部两段（公司名称 + 地址）作为页脚，正文不再包含它们
 function extractFooterFromCoverBody(bodyXml) {
@@ -251,12 +253,17 @@ async function generateReportPdf(entrustId, headerData, taskId) {
   const { entrust, items, rows, extra, totalSamples } = data;
   const entrustNo = entrust.entrust_no;
 
+  const isRoad = entrust.entrust_type === '路基压实度';
   if (!fs.existsSync(TEMPLATE_COVER)) throw new Error('封面模板不存在');
   if (!fs.existsSync(TEMPLATE_INFO)) throw new Error('信息页模板不存在');
-  if (!fs.existsSync(TEMPLATE_DATA)) throw new Error('数据页模板不存在');
+  if (!isRoad && !fs.existsSync(TEMPLATE_DATA)) throw new Error('数据页模板不存在');
+  if (isRoad && !fs.existsSync(TEMPLATE_DATA_ROAD)) throw new Error('道路数据页模板不存在');
 
-  const categoryNames = { 'SYS': '管道压实度（灌砂法）' };
-  const dataPages = Math.max(1, Math.ceil(rows.length / ROWS_PER_PAGE));
+  const categoryNames = {
+    'SYS': isRoad ? '塘渣层压实度（灌砂法）' : '管道压实度（灌砂法）',
+  };
+  const rowsPerPage = isRoad ? ROWS_PER_PAGE_ROAD : ROWS_PER_PAGE;
+  const dataPages = Math.max(1, Math.ceil(rows.length / rowsPerPage));
   const totalReportPages = 1 + dataPages;
   const ts = Date.now();
   const convertPairs = [];
@@ -288,7 +295,7 @@ async function generateReportPdf(entrustId, headerData, taskId) {
       report_no: entrustNo,
       project_name: headerData.project_name || entrust.project_name || '',
       client_unit: headerData.client_unit || entrust.client_unit || '',
-      test_item: headerData.test_item || categoryNames[entrust.category_code] || entrust.entrust_type || '',
+      test_item: headerData.test_item || extra.test_item || categoryNames[entrust.category_code] || entrust.entrust_type || '',
       report_date: headerData.report_date || '',
     });
 
@@ -312,7 +319,7 @@ async function generateReportPdf(entrustId, headerData, taskId) {
     // 表格字段
     const fields = [
       { label: '工程名称', value: headerData.project_name || entrust.project_name || '' },
-      { label: '检测类别', value: headerData.entrust_type || entrust.entrust_type || '' },
+      { label: '检测类别', value: headerData.test_type || extra.test_type || entrust.test_type || '' },
       { label: '委托单位', value: headerData.client_unit || entrust.client_unit || '' },
       { label: '建设单位', value: headerData.build_unit || entrust.build_unit || '' },
       { label: '施工单位', value: headerData.construction_unit || entrust.construction_unit || '' },
@@ -351,9 +358,11 @@ async function generateReportPdf(entrustId, headerData, taskId) {
       : `灌砂筒（${sandCylinder}）（SB143） 电子秤（SB133） 电子秤（SB139）`;
     xml = fillCellAfter(xml, '检测设备', equipText, true, 'left');
 
-    // 检测结论
+    // 检测结论（道路使用 CJJ 1-2008 规范）
     const pageRef = dataPages <= 1 ? '第2页' : `第2-${1 + dataPages}页`;
-    const defaultConclusion = `依据《公路路基路面现场测试规程》（JTG 3450—2019）进行检测，所检测项目结果符合《给水排水管工程施工及验收规范》GB 50268-2008的标准和设计要求。详见报告${pageRef}。`;
+    const defaultConclusion = isRoad
+      ? `依据《公路路基路面现场测试规程》（JTG 3450—2019）进行检测，所检测项目结果符合《城镇道路工程施工与质量验收规范》（CJJ 1—2008）的标准和设计要求。详见报告${pageRef}。`
+      : `依据《公路路基路面现场测试规程》（JTG 3450—2019）进行检测，所检测项目结果符合《给水排水管工程施工及验收规范》GB 50268-2008的标准和设计要求。详见报告${pageRef}。`;
     xml = fillCellAfter(xml, '检测结论', headerData.conclusion || extra.conclusion || defaultConclusion, true, 'left');
 
     // 备注 — 最大干密度
@@ -381,8 +390,10 @@ async function generateReportPdf(entrustId, headerData, taskId) {
     for (const ci of items) { posMaterialMap[ci.position_name] = ci.material; }
     const maxDryDensities = extra.max_dry_densities || {};
 
+    const dataTemplate = isRoad ? TEMPLATE_DATA_ROAD : TEMPLATE_DATA;
+
     for (let i = 0; i < dataPages; i++) {
-      const z = new PizZip(fs.readFileSync(TEMPLATE_DATA));
+      const z = new PizZip(fs.readFileSync(dataTemplate));
       let xml = z.files['word/document.xml'].asText();
       xml = fixDocxFont(xml);
 
@@ -390,9 +401,13 @@ async function generateReportPdf(entrustId, headerData, taskId) {
       xml = fillPageHeaderLine(xml, entrustNo, 2 + i, totalReportPages);
 
       // 填充本页数据
-      const pageRows = rows.slice(i * ROWS_PER_PAGE, (i + 1) * ROWS_PER_PAGE);
-      const baseSeq = i * ROWS_PER_PAGE + 1;
-      xml = fillOneDataTable(xml, pageRows, positionDesigns, maxDryDensities, baseSeq, 0, posMaterialMap);
+      const pageRows = rows.slice(i * rowsPerPage, (i + 1) * rowsPerPage);
+      const baseSeq = i * rowsPerPage + 1;
+      if (isRoad) {
+        xml = fillOneRoadDataTable(xml, pageRows, positionDesigns, maxDryDensities, baseSeq, 0, posMaterialMap);
+      } else {
+        xml = fillOneDataTable(xml, pageRows, positionDesigns, maxDryDensities, baseSeq, 0, posMaterialMap);
+      }
 
       z.file('word/document.xml', xml);
       const docxPath = path.join(os.tmpdir(), `report_data_p${i}_${ts}.docx`);
@@ -549,11 +564,15 @@ function fillOneDataTable(xml, pageRows, positionDesigns, maxDryDensities, baseS
     const tv = rd.test_values || {};
     const rawPosition = tv.position || rd.position_name || '';
 
-    // 解析桩号中的左右侧标记
-    let posName = rawPosition;
-    let posSide = '';
-    if (rawPosition.endsWith('左侧')) { posName = rawPosition.slice(0, -2); posSide = '左侧'; }
-    else if (rawPosition.endsWith('右侧')) { posName = rawPosition.slice(0, -2); posSide = '右侧'; }
+    // 解析侧位：优先读独立字段，回退到从 position 字符串分离
+    let posName = tv.position_name || '';
+    let posSide = tv.position_side || '';
+    if (!posName && !posSide && rawPosition) {
+      const sideMatch = rawPosition.match(/^(.*)(左侧|右侧)$/);
+      if (sideMatch) { posName = sideMatch[1]; posSide = sideMatch[2]; }
+      else { posName = rawPosition; }
+    }
+    if (!posName) posName = rawPosition;
 
     // 干密度直接用存储值
     const dryDensity = tv.dry_density ? parseFloat(tv.dry_density) : 0;
@@ -585,8 +604,8 @@ function fillOneDataTable(xml, pageRows, positionDesigns, maxDryDensities, baseS
       position_name: (isGroupFirst ? posName : ''),
       side: posSide,
       design_req: posDesign.str,
-      dry_density: dryDensity > 0 ? String(dryDensity) : '',
-      compaction: compaction > 0 ? String(compaction) : '',
+      dry_density: dryDensity > 0 ? bankersRound(dryDensity, 2) : '',
+      compaction: compaction > 0 ? compaction.toFixed(1) : '',
       judgment,
       isGroupFirst,
     };
@@ -701,6 +720,184 @@ function fillOneDataTable(xml, pageRows, positionDesigns, maxDryDensities, baseS
   return xml;
 }
 
+// 填充单个道路数据表（8列：试样编号|取样桩号|取样位置|最大干密度|设计要求|干密度|压实度|单项判定）
+// 道路数据行无合并，不分侧位
+function fillOneRoadDataTable(xml, pageRows, positionDesigns, maxDryDensities, baseSeq, startFrom, posMaterialMap) {
+  const headerIdx = xml.indexOf('试样编号', startFrom);
+  if (headerIdx === -1) return xml;
+
+  const tableStart = xml.lastIndexOf('<w:tbl>', headerIdx);
+  const tableEnd = xml.indexOf('</w:tbl>', headerIdx) + '</w:tbl>'.length;
+  if (tableStart === -1 || tableEnd < tableStart) return xml;
+
+  let tableXml = xml.substring(tableStart, tableEnd);
+
+  // 收集所有行
+  const allTrs = [];
+  const trRegex = /<w:tr\b([^>]*)>([\s\S]*?)<\/w:tr>/g;
+  let trMatch;
+  while ((trMatch = trRegex.exec(tableXml)) !== null) {
+    allTrs.push({ full: trMatch[0], content: trMatch[2], attrs: trMatch[1] });
+  }
+
+  // 找到表头行
+  let headerRowIdx = -1;
+  for (let i = 0; i < allTrs.length; i++) {
+    if (allTrs[i].content.includes('试样编号')) {
+      headerRowIdx = i;
+      break;
+    }
+  }
+  if (headerRowIdx === -1) return xml;
+
+  // 分离数据行（8列单元格）
+  const templateDataRows = [];
+  for (let i = headerRowIdx + 1; i < allTrs.length; i++) {
+    const cellCount = (allTrs[i].content.match(/<w:tc\b/g) || []).length;
+    if (cellCount >= 8) {
+      templateDataRows.push(allTrs[i]);
+    } else {
+      break;
+    }
+  }
+
+  // 查找材料对应的最大干密度
+  function getMaxDry(material, position) {
+    const mat = material || posMaterialMap[position] || '';
+    if (mat && maxDryDensities[mat]) return parseFloat(maxDryDensities[mat]);
+    const vals = Object.values(maxDryDensities).filter(Boolean);
+    return vals.length > 0 ? parseFloat(vals[0]) : 0;
+  }
+
+  const rowData = pageRows.map((rd, i) => {
+    const tv = rd.test_values || {};
+    const rawPosition = tv.position || rd.position_name || '';
+
+    // 干密度直接用存储值
+    const dryDensity = tv.dry_density ? parseFloat(tv.dry_density) : 0;
+    const rawDD = dryDensity || calcDryDensity(tv);
+    const maxDry = getMaxDry(tv.material || rd.material, rd.position_name);
+    const compaction = rawDD > 0 && maxDry > 0 ? parseFloat(bankersRound(rawDD / maxDry * 100, 1)) : 0;
+
+    // 按部位查找设计要求
+    const posKey = rd.position_name || '';
+    const posDesign = positionDesigns[posKey] || { str: '', num: 90, operator: '≥', tolerance: null };
+
+    // 判定逻辑
+    let judgment = '';
+    if (compaction > 0) {
+      if (posDesign.operator === '±' && posDesign.tolerance != null) {
+        judgment = Math.abs(compaction - posDesign.num) <= posDesign.tolerance ? '符合设计要求' : '不符合设计要求';
+      } else {
+        judgment = compaction >= posDesign.num ? '符合设计要求' : '不符合设计要求';
+      }
+    }
+
+    return {
+      sample_no: String(baseSeq + i),
+      stake_no: tv.stake_no || '',
+      position: rawPosition,
+      max_dry_density: maxDry > 0 ? bankersRound(maxDry, 2) : '',
+      design_req: posDesign.str,
+      dry_density: dryDensity > 0 ? bankersRound(dryDensity, 2) : '',
+      compaction: compaction > 0 ? compaction.toFixed(1) : '',
+      judgment,
+    };
+  });
+
+  // 辅助：填充单段文本
+  function fillCellText(tcContent, text) {
+    tcContent = tcContent.replace(/<w:r[\s>][\s\S]*?<\/w:r>/g, '');
+    if (!text) return tcContent;
+    if (!/<w:jc\b/.test(tcContent)) {
+      tcContent = tcContent.replace('</w:pPr>', '<w:jc w:val="center"/></w:pPr>');
+    } else {
+      tcContent = tcContent.replace(/<w:jc w:val="[^"]*"\/>/g, '<w:jc w:val="center"/>');
+    }
+    const sz = fitFontSize(text);
+    const run = `<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="宋体"/><w:sz w:val="${sz}"/><w:szCs w:val="${sz}"/></w:rPr><w:t xml:space="preserve">${escXml(text)}</w:t></w:r>`;
+    return tcContent.replace('</w:pPr>', '</w:pPr>' + run);
+  }
+
+  // 列映射: 0=试样编号 1=取样桩号 2=取样位置 3=最大干密度 4=设计要求 5=干密度 6=压实度 7=单项判定
+  function fillDataRow(tr, rd) {
+    const tcs = [];
+    const tcRegex = /<w:tc\b([^>]*)>([\s\S]*?)<\/w:tc>/g;
+    let tcMatch;
+    while ((tcMatch = tcRegex.exec(tr.content)) !== null) {
+      tcs.push({ full: tcMatch[0], openTag: '<w:tc' + tcMatch[1] + '>', content: tcMatch[2] });
+    }
+    if (tcs.length < 8) return tr.full;
+
+    let newRow = tr.content;
+    newRow = newRow.replace(tcs[0].full, tcs[0].openTag + fillCellText(tcs[0].content, rd.sample_no) + '</w:tc>');
+    newRow = newRow.replace(tcs[1].full, tcs[1].openTag + fillCellText(tcs[1].content, rd.stake_no) + '</w:tc>');
+    newRow = newRow.replace(tcs[2].full, tcs[2].openTag + fillCellText(tcs[2].content, rd.position) + '</w:tc>');
+    newRow = newRow.replace(tcs[3].full, tcs[3].openTag + fillCellText(tcs[3].content, rd.max_dry_density) + '</w:tc>');
+    newRow = newRow.replace(tcs[4].full, tcs[4].openTag + fillCellText(tcs[4].content, rd.design_req) + '</w:tc>');
+    newRow = newRow.replace(tcs[5].full, tcs[5].openTag + fillCellText(tcs[5].content, rd.dry_density) + '</w:tc>');
+    newRow = newRow.replace(tcs[6].full, tcs[6].openTag + fillCellText(tcs[6].content, rd.compaction) + '</w:tc>');
+    newRow = newRow.replace(tcs[7].full, tcs[7].openTag + fillCellText(tcs[7].content, rd.judgment) + '</w:tc>');
+
+    return newRow;
+  }
+
+  // 填充数据行
+  for (let i = 0; i < Math.min(rowData.length, templateDataRows.length); i++) {
+    const newRow = fillDataRow(templateDataRows[i], rowData[i]);
+    tableXml = tableXml.replace(templateDataRows[i].full, '<w:tr' + templateDataRows[i].attrs + '>' + newRow + '</w:tr>');
+  }
+
+  // "以下空白" — 当本页数据不足时
+  if (rowData.length < templateDataRows.length) {
+    const blankRowIdx = rowData.length;
+    if (blankRowIdx < templateDataRows.length) {
+      const tr = templateDataRows[blankRowIdx];
+      const tcs = [];
+      const tcRegex = /<w:tc\b([^>]*)>([\s\S]*?)<\/w:tc>/g;
+      let tcMatch;
+      while ((tcMatch = tcRegex.exec(tr.content)) !== null) {
+        tcs.push({ full: tcMatch[0], openTag: '<w:tc' + tcMatch[1] + '>', content: tcMatch[2] });
+      }
+      if (tcs.length >= 8) {
+        let newRow = tr.content;
+        // 清空前3列（编号、桩号、位置）
+        newRow = newRow.replace(tcs[0].full, tcs[0].openTag + fillCellText(tcs[0].content, '') + '</w:tc>');
+        newRow = newRow.replace(tcs[1].full, tcs[1].openTag + fillCellText(tcs[1].content, '') + '</w:tc>');
+        newRow = newRow.replace(tcs[2].full, tcs[2].openTag + fillCellText(tcs[2].content, '') + '</w:tc>');
+        // "以下空白" 填入 最大干密度/设计/干密度/压实度 四列
+        newRow = newRow.replace(tcs[3].full, tcs[3].openTag + fillCellText(tcs[3].content, '以') + '</w:tc>');
+        newRow = newRow.replace(tcs[4].full, tcs[4].openTag + fillCellText(tcs[4].content, '下') + '</w:tc>');
+        newRow = newRow.replace(tcs[5].full, tcs[5].openTag + fillCellText(tcs[5].content, '空') + '</w:tc>');
+        newRow = newRow.replace(tcs[6].full, tcs[6].openTag + fillCellText(tcs[6].content, '白') + '</w:tc>');
+        newRow = newRow.replace(tcs[7].full, tcs[7].openTag + fillCellText(tcs[7].content, '') + '</w:tc>');
+        tableXml = tableXml.replace(tr.full, '<w:tr' + tr.attrs + '>' + newRow + '</w:tr>');
+      }
+    }
+
+    // 剩余空行清空
+    for (let i = rowData.length + 1; i < templateDataRows.length; i++) {
+      const tr = templateDataRows[i];
+      const tcs = [];
+      const tcRegex = /<w:tc\b([^>]*)>([\s\S]*?)<\/w:tc>/g;
+      let tcMatch;
+      while ((tcMatch = tcRegex.exec(tr.content)) !== null) {
+        tcs.push({ full: tcMatch[0], openTag: '<w:tc' + tcMatch[1] + '>', content: tcMatch[2] });
+      }
+      if (tcs.length < 8) continue;
+      let newRow = tr.content;
+      for (let c = 0; c < tcs.length; c++) {
+        let tcContent = tcs[c].content.replace(/<w:r[\s>][\s\S]*?<\/w:r>/g, '');
+        newRow = newRow.replace(tcs[c].full, tcs[c].openTag + tcContent + '</w:tc>');
+      }
+      tableXml = tableXml.replace(tr.full, '<w:tr' + tr.attrs + '>' + newRow + '</w:tr>');
+    }
+  }
+
+  xml = xml.substring(0, tableStart) + tableXml + xml.substring(tableEnd);
+  return xml;
+}
+
 // ===== API 端点 =====
 
 // POST /:id/save — 保存报告抬头数据
@@ -736,6 +933,8 @@ exports.saveReportData = async (req, res) => {
       try { remark = typeof firstRecord.remark === 'string' ? JSON.parse(firstRecord.remark) : (firstRecord.remark || {}); } catch {}
 
       remark.entrust_type = body.entrust_type || '';
+      remark.test_type = body.test_type || '';
+      remark.test_item = body.test_item || '';
       remark.test_date = body.test_date || '';
       remark.test_basis = body.test_basis || [];
       remark.sand_cylinder = body.test_equipment?.sand_cylinder || '150mm';
@@ -767,11 +966,22 @@ exports.saveReportData = async (req, res) => {
           let tv = {};
           try { tv = typeof existing.test_values === 'string' ? JSON.parse(existing.test_values) : (existing.test_values || {}); } catch {}
           if (dr.stake_no !== undefined) tv.stake_no = dr.stake_no;
-          if (dr.position_name || dr.position_side) {
-            const oldPos = tv.position || '';
-            const name = dr.position_name || oldPos.replace(/(左侧|右侧)$/, '');
-            const side = dr.position_side !== undefined ? dr.position_side : (oldPos.match(/(左侧|右侧)$/) || [''])[0];
-            tv.position = name + side;
+          if (dr.position_name !== undefined || dr.position_side !== undefined) {
+            // 优先从独立字段取旧值，回退到拼接字段解析
+            let oldName = tv.position_name || '';
+            let oldSide = tv.position_side || '';
+            if (!oldName && !oldSide) {
+              const oldPos = tv.position || '';
+              // 尝试从旧格式 position 中分离（仅限已知后缀）
+              const sideMatch = oldPos.match(/^(.*)(左侧|右侧)$/);
+              if (sideMatch) { oldName = sideMatch[1]; oldSide = sideMatch[2]; }
+              else { oldName = oldPos; }
+            }
+            const name = dr.position_name !== undefined ? dr.position_name : oldName;
+            const side = dr.position_side !== undefined ? dr.position_side : oldSide;
+            tv.position_name = name;
+            tv.position_side = side;
+            tv.position = name + side; // 保留拼接字段兼容旧读取
           }
           updateStmt.run(JSON.stringify(tv), dr.id);
         }
@@ -790,7 +1000,10 @@ exports.getReportData = async (req, res) => {
     const data = await fetchReportData(req.params.id);
     const { entrust, items, rows, extra, totalSamples, defaultSectionPile } = data;
 
-    const categoryNames = { 'SYS': '管道压实度（灌砂法）' };
+    const isRoad = entrust.entrust_type === '路基压实度';
+    const categoryNames = {
+      'SYS': isRoad ? '塘渣层压实度（灌砂法）' : '管道压实度（灌砂法）',
+    };
 
     // 部位 → 设计要求映射
     const posDesigns = {};
@@ -817,12 +1030,13 @@ exports.getReportData = async (req, res) => {
           report_no: entrust.entrust_no,
           project_name: entrust.project_name || '',
           client_unit: entrust.client_unit || '',
-          test_item: categoryNames[entrust.category_code] || entrust.entrust_type || '',
+          test_item: extra.test_item || categoryNames[entrust.category_code] || entrust.entrust_type || '',
           report_date: entrust.report_date || '',
         },
         // 信息页
         info: {
           entrust_type: entrust.entrust_type || '',
+          test_type: extra.test_type || entrust.test_type || '',
           build_unit: entrust.build_unit || '',
           construction_unit: entrust.construction_unit || '',
           supervision_unit: entrust.supervision_unit || '',
@@ -848,7 +1062,7 @@ exports.getReportData = async (req, res) => {
           tester: extra.tester || '',
           reviewer: extra.reviewer || '',
         },
-        // 数据预览 — 直接从记录单已存储值读取
+        // 数据预览 — 根据类型返回不同结构
         data_rows: rows.map(r => {
           const tv = r.test_values || {};
           const rawPosition = tv.position || r.position_name || '';
@@ -859,12 +1073,6 @@ exports.getReportData = async (req, res) => {
           const rawDD = dryDensity || calcDryDensity(tv);
           const maxDry = getMaxDry(tv.material || r.material, r.position_name);
           const comp = rawDD > 0 && maxDry > 0 ? parseFloat(bankersRound(rawDD / maxDry * 100, 1)) : 0;
-
-          // 解析侧位（仅"左侧"/"右侧"精确匹配，不再猜测"底侧"/"上侧"）
-          let posName = rawPosition;
-          let posSide = '';
-          if (rawPosition.endsWith('左侧')) { posName = rawPosition.slice(0, -2); posSide = '左侧'; }
-          else if (rawPosition.endsWith('右侧')) { posName = rawPosition.slice(0, -2); posSide = '右侧'; }
 
           // 按部位取设计要求
           const posKey = r.position_name || '';
@@ -880,19 +1088,34 @@ exports.getReportData = async (req, res) => {
             }
           }
 
-          return {
+          const base = {
             id: r.id,
             seq_no: r.seq_no,
             sample_no: r.sample_no,
             stake_no: tv.stake_no || r.position_name || '',
-            position_name: posName || r.position_name || '',
-            position_side: posSide,
             material: tv.material || '',
             design_requirement: pd.str,
+            max_dry_density: maxDry > 0 ? bankersRound(maxDry, 2) : '',
             dry_density: dryDensity > 0 ? parseFloat(dryDensity).toFixed(2) : '',
             compaction: comp > 0 ? parseFloat(comp).toFixed(1) : '',
             judgment,
           };
+
+          if (isRoad) {
+            // 道路：不分侧位
+            return { ...base, position_name: rawPosition, position_side: '' };
+          } else {
+            // 管道：解析侧位
+            let posName = tv.position_name || '';
+            let posSide = tv.position_side || '';
+            if (!posName && !posSide && rawPosition) {
+              const sideMatch = rawPosition.match(/^(.*)(左侧|右侧)$/);
+              if (sideMatch) { posName = sideMatch[1]; posSide = sideMatch[2]; }
+              else { posName = rawPosition; }
+            }
+            if (!posName) posName = rawPosition;
+            return { ...base, position_name: posName || r.position_name || '', position_side: posSide };
+          }
         }),
         // 保存 entrust 原有值（供更新用）
         entrust_id: entrust.id,

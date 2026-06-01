@@ -61,15 +61,16 @@
       <el-table :data="tableData" v-loading="loading" stripe style="width:100%"
         :header-cell-style="{ background: '#f8f9fb', color: '#1e1e1e', fontWeight: 600 }"
         @sort-change="handleSortChange">
-        <el-table-column prop="project_no" label="工程编号" width="110" sortable="custom" />
+        <el-table-column prop="project_no" label="工程编号" width="110" sortable="custom" :sort-orders="['ascending','descending']" />
         <el-table-column prop="project_name" label="工程名称" min-width="180" show-overflow-tooltip />
         <el-table-column prop="client_unit" label="委托单位" min-width="160" show-overflow-tooltip />
         <el-table-column prop="client_person" label="委托人" width="100" />
         <el-table-column prop="supervision_unit" label="监理单位" min-width="160" show-overflow-tooltip />
         <el-table-column prop="witness_person" label="见证人" width="100" />
+        <el-table-column prop="test_type" label="检测类别" width="100" />
         <el-table-column prop="construction_unit" label="施工单位" min-width="160" show-overflow-tooltip />
         <el-table-column prop="build_unit" label="建设单位" min-width="160" show-overflow-tooltip />
-        <el-table-column prop="create_time" label="创建时间" width="160" sortable="custom" />
+        <el-table-column prop="create_time" label="创建时间" width="160" sortable="custom" :sort-orders="['ascending','descending']" />
         <el-table-column label="操作" width="150" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="openDialog(row)">编辑</el-button>
@@ -129,6 +130,12 @@
             </el-form-item>
           </el-col>
         </el-row>
+        <el-form-item label="检测类别">
+          <el-radio-group v-model="form.test_type" @change="onTestTypeChange">
+            <el-radio value="见证检测">见证检测</el-radio>
+            <el-radio value="委托检测">委托检测</el-radio>
+          </el-radio-group>
+        </el-form-item>
         <el-row :gutter="20">
           <el-col :span="12">
             <el-form-item label="施工单位" prop="construction_unit">
@@ -154,7 +161,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getProjectList, createProject, updateProject, deleteProject } from '../../api/project'
 
@@ -173,6 +180,7 @@ const form = reactive({
   client_person: '',
   supervision_unit: '',
   witness_person: '',
+  test_type: '',
   construction_unit: '',
   build_unit: '',
   remark: ''
@@ -195,6 +203,10 @@ async function fetchData() {
     if (searchForm.keyword) {
       params.field = searchForm.field
       params.keyword = searchForm.keyword
+    }
+    if (sortParams.field) {
+      params.sortField = sortParams.field
+      params.sortOrder = sortParams.order || 'ascending'
     }
     const res = await getProjectList(params)
     tableData.value = res.data.list
@@ -219,7 +231,16 @@ function resetSearch() {
 function handleSortChange({ prop, order }) {
   sortParams.field = prop
   sortParams.order = order
+  fetchData()
 }
+
+// 根据监理单位/见证人计算默认检测类别
+function calcDefaultTestType() {
+  return (form.supervision_unit || form.witness_person) ? '见证检测' : '委托检测'
+}
+
+// 记录打开弹窗时的默认值，用于变更确认
+let openingDefaultTestType = ''
 
 function openDialog(row) {
   if (row) {
@@ -230,21 +251,56 @@ function openDialog(row) {
       project_name: row.project_name,
       client_unit: row.client_unit,
       client_person: row.client_person,
-      supervision_unit: row.supervision_unit,
-      witness_person: row.witness_person,
-      construction_unit: row.construction_unit,
-      build_unit: row.build_unit,
-      remark: row.remark
+      supervision_unit: row.supervision_unit || '',
+      witness_person: row.witness_person || '',
+      test_type: row.test_type || '',
+      construction_unit: row.construction_unit || '',
+      build_unit: row.build_unit || '',
+      remark: row.remark || ''
     })
   } else {
     isEdit.value = false
     Object.assign(form, {
       id: null, project_no: '', project_name: '', client_unit: '', client_person: '',
-      supervision_unit: '', witness_person: '', construction_unit: '', build_unit: '', remark: ''
+      supervision_unit: '', witness_person: '', test_type: '',
+      construction_unit: '', build_unit: '', remark: ''
     })
   }
+  // 如果已有值则保留，否则根据监理/见证人计算默认值
+  if (!form.test_type) {
+    form.test_type = calcDefaultTestType()
+  }
+  openingDefaultTestType = form.test_type
   dialogVisible.value = true
 }
+
+// 检测类别变更确认
+function onTestTypeChange(val) {
+  if (val === openingDefaultTestType) {
+    openingDefaultTestType = val
+    return
+  }
+  ElMessageBox.confirm(
+    `确定要将检测类别从「${openingDefaultTestType}」更改为「${val}」吗？`,
+    '更改检测类别',
+    { confirmButtonText: '确认更改', cancelButtonText: '取消', type: 'warning' }
+  ).then(() => {
+    openingDefaultTestType = val
+  }).catch(() => {
+    form.test_type = openingDefaultTestType
+  })
+}
+
+// 监理/见证人变化时自动切换检测类别
+watch([() => form.supervision_unit, () => form.witness_person], ([sup, wit]) => {
+  if (sup || wit) {
+    form.test_type = '见证检测'
+    openingDefaultTestType = '见证检测'
+  } else {
+    form.test_type = '委托检测'
+    openingDefaultTestType = '委托检测'
+  }
+})
 
 async function handleSubmit() {
   const valid = await formRef.value.validate().catch(() => false)
